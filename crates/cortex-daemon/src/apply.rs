@@ -64,13 +64,14 @@ fn validate_relative_path(s: &str) -> Option<&str> {
 
 fn build_system_prompt(workspace_root: &Path) -> String {
     format!(
-        "You are CORTEX, a coding AI. Workspace root: {root}\n\n\
+        "/no_think\n\
+         You are CORTEX, a coding AI. Workspace root: {root}\n\n\
          Use the propose_edit tool to propose a single-file change.\n\
          - workspace_relative_path: path relative to workspace root, no '..' (e.g. 'src/lib.rs')\n\
          - new_content: complete file content after the edit\n\
          - rationale: one sentence describing what you changed\n\n\
          Read the current file content from context if provided. \
-         Always produce valid, compiling code.",
+         Always produce valid, compiling code. Respond only with the tool call — no prose.",
         root = workspace_root.display()
     )
 }

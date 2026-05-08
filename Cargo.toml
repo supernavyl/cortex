@@ -1,0 +1,21 @@
+[workspace]
+members = ["crates/cortex-core", "crates/cortex-cli", "crates/cortex-daemon", "crates/cortex-context", "crates/cortex-tools", "crates/cortex-mcp"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.93"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+rusqlite = { version = "0.33", features = ["bundled"] }
+futures = "0.3"

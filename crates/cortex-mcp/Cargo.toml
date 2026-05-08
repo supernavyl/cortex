@@ -1,0 +1,20 @@
+[package]
+name = "cortex-mcp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cortex-verify"
+path = "src/bin/verify.rs"
+
+[dependencies]
+cortex-tools = { path = "../cortex-tools" }
+cortex-core = { path = "../cortex-core" }
+rmcp = { version = "1", features = ["server", "client", "transport-io", "transport-child-process"] }
+tokio.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+clap.workspace = true

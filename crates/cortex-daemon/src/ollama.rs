@@ -48,6 +48,8 @@ pub struct OllamaFunctionCall {
 struct ChatResponse {
     message: ChatMessage,
     #[serde(default)]
+    done: bool,
+    #[serde(default)]
     prompt_eval_count: u32,
     #[serde(default)]
     eval_count: u32,
@@ -169,8 +171,9 @@ impl OllamaClient {
         Ok(32768) // safe fallback
     }
 
-    /// Chat completion with tool-use support (non-streaming).
-    /// Returns the assistant message and token counts.
+    /// Chat completion with tool-use support.
+    /// Streams chunks from Ollama and accumulates them so the connection stays
+    /// alive during long thinking-model generations (no single-response timeout).
     pub async fn chat(
         &self,
         model: &str,
@@ -182,9 +185,8 @@ impl OllamaClient {
             model: model.to_string(),
             messages,
             tools,
-            stream: false,
+            stream: true,
             options: Some(GenerateOptions {
-                // Cloud proxy (num_ctx==0) rejects -1; use large cap. Local: -1 = unlimited.
                 num_predict: if num_ctx == 0 { 32_768 } else { -1 },
                 num_ctx: if num_ctx == 0 { None } else { Some(num_ctx) },
             }),
@@ -204,15 +206,49 @@ impl OllamaClient {
             anyhow::bail!("ollama chat returned {status}: {body}");
         }
 
-        let chat_resp: ChatResponse = resp
-            .json()
-            .await
-            .context("failed to parse ollama chat response")?;
+        // Accumulate streaming chunks into a single assembled message.
+        let mut content = String::new();
+        let mut tool_calls: Option<Vec<OllamaToolCall>> = None;
+        let mut tokens_in = 0u32;
+        let mut tokens_out = 0u32;
+        let mut stream = resp.bytes_stream();
+
+        while let Some(chunk_result) = stream.next().await {
+            let bytes = chunk_result.context("chat stream read error")?;
+            for line in bytes.split(|&b| b == b'\n') {
+                if line.is_empty() {
+                    continue;
+                }
+                let chunk: ChatResponse = match serde_json::from_slice(line) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                if let Some(c) = &chunk.message.content {
+                    content.push_str(c);
+                }
+                if chunk.message.tool_calls.is_some() {
+                    tool_calls = chunk.message.tool_calls.clone();
+                }
+                if chunk.done {
+                    tokens_in = chunk.prompt_eval_count;
+                    tokens_out = chunk.eval_count;
+                    break;
+                }
+            }
+        }
 
         Ok((
-            chat_resp.message,
-            chat_resp.prompt_eval_count,
-            chat_resp.eval_count,
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: if content.is_empty() {
+                    None
+                } else {
+                    Some(content)
+                },
+                tool_calls,
+            },
+            tokens_in,
+            tokens_out,
         ))
     }
 
