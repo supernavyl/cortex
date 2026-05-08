@@ -100,6 +100,7 @@ async fn handle_client(
                 tier,
                 cwd,
                 agentic,
+                session_id,
             } => {
                 handle_ask(
                     &mut writer,
@@ -112,6 +113,7 @@ async fn handle_client(
                     tier,
                     cwd.as_deref(),
                     agentic,
+                    session_id.as_deref(),
                 )
                 .await?;
             }
@@ -213,6 +215,59 @@ async fn handle_client(
                 };
                 send_chunk(&mut writer, &done).await?;
             }
+            Method::Sessions => {
+                let sessions = {
+                    let store = symbols.lock().unwrap();
+                    store.list_sessions().unwrap_or_default()
+                };
+                if sessions.is_empty() {
+                    let chunk = ResponseChunk::Status {
+                        message: "no sessions".to_string(),
+                    };
+                    send_chunk(&mut writer, &chunk).await?;
+                } else {
+                    for s in &sessions {
+                        let chunk = ResponseChunk::Status {
+                            message: format!(
+                                "  {} — {} messages (created {}, updated {})",
+                                s.id,
+                                s.message_count,
+                                fmt_ts(s.created_at),
+                                fmt_ts(s.updated_at),
+                            ),
+                        };
+                        send_chunk(&mut writer, &chunk).await?;
+                    }
+                }
+                let done = ResponseChunk::Done {
+                    id: request.id,
+                    model_used: "none".to_string(),
+                    tokens_in: 0,
+                    tokens_out: 0,
+                };
+                send_chunk(&mut writer, &done).await?;
+            }
+            Method::DeleteSession { name } => {
+                let deleted = {
+                    let store = symbols.lock().unwrap();
+                    store.delete_session(&name).unwrap_or(false)
+                };
+                let chunk = ResponseChunk::Status {
+                    message: if deleted {
+                        format!("deleted session \"{name}\"")
+                    } else {
+                        format!("session \"{name}\" not found")
+                    },
+                };
+                send_chunk(&mut writer, &chunk).await?;
+                let done = ResponseChunk::Done {
+                    id: request.id,
+                    model_used: "none".to_string(),
+                    tokens_in: 0,
+                    tokens_out: 0,
+                };
+                send_chunk(&mut writer, &done).await?;
+            }
             Method::Shutdown => {
                 tracing::info!("shutdown requested");
                 let chunk = ResponseChunk::Status {
@@ -251,6 +306,7 @@ async fn handle_ask(
     tier: Option<cortex_core::protocol::ModelTier>,
     cwd: Option<&str>,
     agentic: bool,
+    session_id: Option<&str>,
 ) -> Result<()> {
     // Detect workspace from CLI's cwd
     let ws = cwd.and_then(|d| workspace::detect(std::path::Path::new(d)));
@@ -407,6 +463,24 @@ async fn handle_ask(
     }
 
     // ── Single-model path ─────────────────────────────────────────────
+
+    // Load session history and inject into system prompt
+    let system_prompt = if let Some(sid) = session_id {
+        let store = symbols.lock().unwrap();
+        let history = store.get_recent_messages(sid, 20).unwrap_or_default();
+        if history.is_empty() {
+            system_prompt
+        } else {
+            let mut history_str = String::from("\n\n## Previous conversation\n\n");
+            for msg in &history {
+                history_str.push_str(&format!("**{}**: {}\n\n", msg.role, msg.content));
+            }
+            format!("{system_prompt}{history_str}")
+        }
+    } else {
+        system_prompt
+    };
+
     let executor = if agentic {
         ToolExecutor::new(policy).enable_gate(PreApplyGate::default())
     } else {
@@ -431,9 +505,12 @@ async fn handle_ask(
         .await
     });
 
+    let mut full_response = String::new();
+
     while let Some(event) = rx.recv().await {
         match event {
             TurnEvent::TextDelta(text) => {
+                full_response.push_str(&text);
                 let chunk = ResponseChunk::Token { text };
                 send_chunk(writer, &chunk).await?;
             }
@@ -467,6 +544,16 @@ async fn handle_ask(
     }
 
     turn_handle.await??;
+
+    // Save exchange to session memory
+    if let Some(sid) = session_id {
+        if let Ok(store) = symbols.lock() {
+            let _ = store.add_message(sid, "user", prompt);
+            if !full_response.is_empty() {
+                let _ = store.add_message(sid, "assistant", &full_response);
+            }
+        }
+    }
 
     Ok(())
 }
@@ -1193,6 +1280,23 @@ async fn call_model(ollama: &OllamaClient, model: &str, prompt: &str) -> String 
             tracing::warn!(error = %e, model, "call_model: model call failed");
             "[model call failed]".to_string()
         }
+    }
+}
+
+fn fmt_ts(secs: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let delta = now - secs;
+    if delta < 60 {
+        "just now".to_string()
+    } else if delta < 3600 {
+        format!("{}m ago", delta / 60)
+    } else if delta < 86400 {
+        format!("{}h ago", delta / 3600)
+    } else {
+        format!("{}d ago", delta / 86400)
     }
 }
 

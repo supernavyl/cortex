@@ -357,12 +357,16 @@ impl OllamaModelClient {
     }
 
     /// Query the model's real context window and build a client sized to it.
+    /// Caps at 32 768 — larger values cause Ollama to allocate multi-GB KV caches even
+    /// for short prompts, adding tens of seconds of setup latency.
     /// Cloud models (`:cloud` suffix) skip the query — the remote server controls context.
     pub async fn with_max_context(client: OllamaClient, model: String) -> Self {
+        const MAX_CTX: u32 = 32_768;
         let context_length = if model.contains(":cloud") || model.ends_with("-cloud") {
             0 // sentinel: don't override num_ctx for cloud models
         } else {
-            client.query_context_length(&model).await.unwrap_or(32768)
+            let reported = client.query_context_length(&model).await.unwrap_or(32768);
+            reported.min(MAX_CTX)
         };
         Self {
             client,
