@@ -72,7 +72,7 @@ async fn handle_client(
     symbols: &Arc<Mutex<SymbolStore>>,
     shutdown: &Arc<tokio::sync::Notify>,
     kairos: &Arc<Mutex<crate::kairos::KairosState>>,
-    _apply_mutex: &Arc<tokio::sync::Mutex<()>>,
+    apply_mutex: &Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);
@@ -151,23 +151,17 @@ async fn handle_client(
                 };
                 send_chunk(&mut writer, &done).await?;
             }
-            Method::Apply {
-                prompt: _,
-                files: _,
-                cwd: _,
-            } => {
-                // TODO: implement apply with verification gate
-                let chunk = ResponseChunk::Status {
-                    message: "apply not yet implemented — use 'ask' for now".to_string(),
-                };
-                send_chunk(&mut writer, &chunk).await?;
-                let done = ResponseChunk::Done {
-                    id: request.id,
-                    model_used: "none".to_string(),
-                    tokens_in: 0,
-                    tokens_out: 0,
-                };
-                send_chunk(&mut writer, &done).await?;
+            Method::Apply { prompt, cwd, .. } => {
+                handle_apply(
+                    &mut writer,
+                    &config,
+                    &ollama,
+                    request.id,
+                    &prompt,
+                    cwd.as_deref(),
+                    apply_mutex,
+                )
+                .await?;
             }
             Method::Status => {
                 let models = ollama.list_models().await.unwrap_or_default();
@@ -473,6 +467,61 @@ async fn handle_ask(
 
     turn_handle.await??;
 
+    Ok(())
+}
+
+async fn handle_apply(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    config: &Config,
+    ollama: &OllamaClient,
+    request_id: u64,
+    prompt: &str,
+    cwd: Option<&str>,
+    apply_mutex: &Arc<tokio::sync::Mutex<()>>,
+) -> Result<()> {
+    let workspace_root = cwd
+        .and_then(|d| workspace::detect(std::path::Path::new(d)))
+        .map(|ws| ws.root)
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+
+    let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
+
+    let status = ResponseChunk::Status {
+        message: format!("[APPLY] workspace: {}", workspace_root.display()),
+    };
+    send_chunk(writer, &status).await?;
+
+    // Acquire mutex — serialises concurrent Apply requests
+    let _guard = apply_mutex.lock().await;
+
+    let gate = cortex_core::gate::SandboxGate::new(workspace_root.clone());
+    let model = config.models.code_model.clone();
+    let ollama_clone = ollama.clone();
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+    let prompt_owned = prompt.to_string();
+    let workspace_owned = workspace_root.clone();
+
+    let apply_task = tokio::spawn(async move {
+        crate::apply::run_apply_loop(
+            &prompt_owned,
+            &workspace_owned,
+            request_id,
+            ollama_clone,
+            model,
+            &gate,
+            &tx,
+        )
+        .await
+    });
+
+    while let Some(chunk) = rx.recv().await {
+        send_chunk(writer, &chunk).await?;
+    }
+
+    apply_task.await??;
     Ok(())
 }
 
