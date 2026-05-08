@@ -23,6 +23,7 @@ pub async fn run(
     ollama: OllamaClient,
     symbols: Arc<Mutex<SymbolStore>>,
     kairos: Arc<Mutex<crate::kairos::KairosState>>,
+    apply_mutex: Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
     let listener =
         UnixListener::bind(&config.daemon.socket_path).context("failed to bind unix socket")?;
@@ -41,9 +42,10 @@ pub async fn run(
                 let symbols = Arc::clone(&symbols);
                 let shutdown = Arc::clone(&shutdown);
                 let kairos = Arc::clone(&kairos);
+                let apply_mutex = Arc::clone(&apply_mutex);
 
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, &config, &ollama, &symbols, &shutdown, &kairos).await {
+                    if let Err(e) = handle_client(stream, &config, &ollama, &symbols, &shutdown, &kairos, &apply_mutex).await {
                         tracing::error!(error = %e, "client handler error");
                     }
                 });
@@ -70,6 +72,7 @@ async fn handle_client(
     symbols: &Arc<Mutex<SymbolStore>>,
     shutdown: &Arc<tokio::sync::Notify>,
     kairos: &Arc<Mutex<crate::kairos::KairosState>>,
+    _apply_mutex: &Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
     let (reader, mut writer) = stream.into_split();
     let mut reader = BufReader::new(reader);

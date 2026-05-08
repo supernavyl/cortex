@@ -105,7 +105,16 @@ async fn main() -> Result<()> {
     let symbol_store_arc = std::sync::Arc::new(std::sync::Mutex::new(symbol_store));
     let kairos_state = kairos::KairosEngine::start(config.clone(), symbol_store_arc.clone());
 
-    server::run(config, ollama_client, symbol_store_arc, kairos_state).await
+    let apply_mutex = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+
+    server::run(
+        config,
+        ollama_client,
+        symbol_store_arc,
+        kairos_state,
+        apply_mutex,
+    )
+    .await
 }
 
 #[cfg(test)]
