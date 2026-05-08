@@ -154,8 +154,8 @@ async fn handle_client(
             Method::Apply { prompt, cwd, .. } => {
                 handle_apply(
                     &mut writer,
-                    &config,
-                    &ollama,
+                    config,
+                    ollama,
                     request.id,
                     &prompt,
                     cwd.as_deref(),
@@ -479,12 +479,14 @@ async fn handle_apply(
     cwd: Option<&str>,
     apply_mutex: &Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
-    let workspace_root = cwd
+    let workspace_root = if let Some(root) = cwd
         .and_then(|d| workspace::detect(std::path::Path::new(d)))
         .map(|ws| ws.root)
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
+    {
+        root
+    } else {
+        std::env::current_dir().context("cannot determine cwd for apply workspace")?
+    };
 
     let workspace_root = workspace_root.canonicalize().unwrap_or(workspace_root);
 
