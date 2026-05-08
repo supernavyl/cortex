@@ -1,0 +1,21 @@
+[package]
+name = "cortex-bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cortex-bench"
+path = "src/main.rs"
+
+[dependencies]
+cortex-core = { path = "../cortex-core" }
+cortex-daemon = { path = "../cortex-daemon" }
+cortex-tools = { path = "../cortex-tools" }
+tokio.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+futures.workspace = true
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }

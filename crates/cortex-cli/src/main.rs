@@ -29,6 +29,9 @@ enum Commands {
         ///             kimi, qwen3-next, gpt-oss-120b, devstral-small-2, deepseek-v3-1, auto.
         #[arg(short, long, default_value = "auto")]
         tier: String,
+        /// Session name for persistent conversation memory.
+        #[arg(short, long)]
+        session: Option<String>,
     },
     /// Index directories for context-aware assistance.
     Index {
@@ -56,6 +59,25 @@ enum Commands {
         /// Files to include as context.
         #[arg(short, long)]
         file: Vec<String>,
+        /// Override the WRITER model (e.g. "glm-5.1:cloud").
+        #[arg(short, long)]
+        model: Option<String>,
+    },
+    /// Manage persistent conversation sessions.
+    Sessions {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionAction {
+    /// List all sessions.
+    List,
+    /// Delete a session.
+    Delete {
+        /// Session name to delete.
+        name: String,
     },
 }
 
@@ -120,7 +142,11 @@ async fn main() -> Result<()> {
         Commands::Research { topic } => {
             research::run(&config, &topic).await?;
         }
-        Commands::Apply { prompt, file } => {
+        Commands::Apply {
+            prompt,
+            file,
+            model,
+        } => {
             let cwd = std::env::current_dir()
                 .ok()
                 .map(|p| p.to_string_lossy().to_string());
@@ -130,6 +156,7 @@ async fn main() -> Result<()> {
                     prompt,
                     files: file,
                     cwd,
+                    model,
                 },
             };
 
@@ -141,7 +168,38 @@ async fn main() -> Result<()> {
 
             send_and_stream(&config, request).await?;
         }
-        Commands::Ask { prompt, file, tier } => {
+        Commands::Sessions { action } => match action {
+            SessionAction::List => {
+                let request = Request {
+                    id: 1,
+                    method: Method::Sessions,
+                };
+                if !config.daemon.socket_path.exists() {
+                    eprintln!("daemon not running, starting...");
+                    start_daemon(&config)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                send_and_stream(&config, request).await?;
+            }
+            SessionAction::Delete { name } => {
+                let request = Request {
+                    id: 1,
+                    method: Method::DeleteSession { name },
+                };
+                if !config.daemon.socket_path.exists() {
+                    eprintln!("daemon not running, starting...");
+                    start_daemon(&config)?;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+                send_and_stream(&config, request).await?;
+            }
+        },
+        Commands::Ask {
+            prompt,
+            file,
+            tier,
+            session,
+        } => {
             let tier = match tier.as_str() {
                 "micro" => Some(ModelTier::Micro),
                 "fast" => Some(ModelTier::Fast),
@@ -173,6 +231,7 @@ async fn main() -> Result<()> {
                     tier,
                     cwd,
                     agentic: true,
+                    session_id: session,
                 },
             };
 

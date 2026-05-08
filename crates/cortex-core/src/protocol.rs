@@ -30,6 +30,9 @@ pub enum Method {
         /// Run agentic tool loop (default true). Set false for single-shot generation.
         #[serde(default = "default_true")]
         agentic: bool,
+        /// Session ID for persistent conversation memory.
+        #[serde(default)]
+        session_id: Option<String>,
     },
     /// Apply a code change with verification.
     Apply {
@@ -38,6 +41,9 @@ pub enum Method {
         /// CLI's current working directory for workspace detection.
         #[serde(default)]
         cwd: Option<String>,
+        /// Override the WRITER model (e.g. "glm-5.1:cloud"). Uses config default if None.
+        #[serde(default)]
+        model: Option<String>,
     },
     /// Index directories for context.
     Index {
@@ -46,6 +52,10 @@ pub enum Method {
     },
     /// Get daemon status.
     Status,
+    /// List all sessions.
+    Sessions,
+    /// Delete a session by name.
+    DeleteSession { name: String },
     /// Shut down the daemon.
     Shutdown,
     /// Multi-agent research with local models.

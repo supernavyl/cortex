@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cortex-core", "crates/cortex-cli", "crates/cortex-daemon", "crates/cortex-context", "crates/cortex-tools", "crates/cortex-mcp"]
+members = ["crates/cortex-core", "crates/cortex-cli", "crates/cortex-daemon", "crates/cortex-context", "crates/cortex-tools", "crates/cortex-mcp", "crates/cortex-bench"]
 resolver = "2"
 
 [workspace.package]

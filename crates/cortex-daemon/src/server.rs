@@ -153,7 +153,12 @@ async fn handle_client(
                 };
                 send_chunk(&mut writer, &done).await?;
             }
-            Method::Apply { prompt, files, cwd } => {
+            Method::Apply {
+                prompt,
+                files,
+                cwd,
+                model,
+            } => {
                 handle_apply(
                     &mut writer,
                     config,
@@ -162,6 +167,7 @@ async fn handle_client(
                     &prompt,
                     &files,
                     cwd.as_deref(),
+                    model.as_deref(),
                     apply_mutex,
                 )
                 .await?;
@@ -566,6 +572,7 @@ async fn handle_apply(
     prompt: &str,
     files: &[String],
     cwd: Option<&str>,
+    model_override: Option<&str>,
     apply_mutex: &Arc<tokio::sync::Mutex<()>>,
 ) -> Result<()> {
     // Prefer detected project root; fall back to client's cwd as-is (bare/new projects
@@ -606,7 +613,9 @@ async fn handle_apply(
     let _guard = apply_mutex.lock().await;
 
     let gate = cortex_core::gate::SandboxGate::new(workspace_root.clone());
-    let model = config.models.code_model.clone();
+    let model = model_override
+        .map(str::to_owned)
+        .unwrap_or_else(|| config.models.code_model.clone());
     let ollama_clone = ollama.clone();
 
     let (tx, mut rx) = tokio::sync::mpsc::channel(64);
