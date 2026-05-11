@@ -1,0 +1,6 @@
+# Per-rule clippy knobs. Lint deny/warn/allow lives in per-crate lib.rs/main.rs.
+# msrv comes from workspace.package.rust-version in Cargo.toml.
+
+cognitive-complexity-threshold = 30
+too-many-arguments-threshold = 10
+type-complexity-threshold = 250
