@@ -320,7 +320,7 @@ impl OllamaClient {
                                         content.push_str(c);
                                     }
                                     if chunk.message.tool_calls.is_some() {
-                                        tracing::debug!(len = line_buf.len(), "chat: tool_calls chunk received");
+                                        tracing::info!(len = line_buf.len(), "chat: tool_calls received");
                                         tool_calls = chunk.message.tool_calls.clone();
                                     }
                                     if chunk.done {
@@ -344,7 +344,27 @@ impl OllamaClient {
                 }
             }
 
-            tracing::debug!(has_tool_calls = tool_calls.is_some(), "chat: response assembled");
+            // Flush any partial line left in the buffer when the stream closes without
+            // a trailing newline (observed with some cloud model proxy responses).
+            if !line_buf.is_empty() && !done {
+                if let Ok(chunk) = serde_json::from_slice::<ChatResponse>(&line_buf) {
+                    if let Some(c) = &chunk.message.content {
+                        content.push_str(c);
+                    }
+                    if chunk.message.tool_calls.is_some() {
+                        tracing::info!(len = line_buf.len(), "chat: tool_calls in flush");
+                        tool_calls = chunk.message.tool_calls.clone();
+                    }
+                    if chunk.done {
+                        tokens_in = chunk.prompt_eval_count;
+                        tokens_out = chunk.eval_count;
+                    }
+                } else {
+                    tracing::warn!(len = line_buf.len(), "chat: leftover bytes unparseable");
+                }
+            }
+
+            tracing::info!(has_tool_calls = tool_calls.is_some(), "chat: response assembled");
             return Ok((
                 ChatMessage {
                     role: "assistant".to_string(),

@@ -435,6 +435,117 @@ impl SandboxGate {
             },
         }
     }
+
+    /// Verify a BATCH of edits atomically in a single sandbox.
+    ///
+    /// All edits are applied to the same temp copy before any verifier runs,
+    /// then `cargo check` runs **once** over the combined result. This is the
+    /// correct primitive for greenfield multi-file projects where individual
+    /// files don't compile until many siblings exist — `verify` (one edit at
+    /// a time) rejects every intermediate state and locks the model into a
+    /// no-op loop.
+    ///
+    /// All-or-nothing semantics: the returned `VerificationResult` applies to
+    /// the entire batch. If the batch is accepted the caller writes every
+    /// edit to disk; if rejected, the caller writes none of them.
+    ///
+    /// Empty batch is accepted as a no-op.
+    pub async fn verify_batch(&self, edits: &[SandboxedEdit]) -> VerificationResult {
+        let start = std::time::Instant::now();
+        let count = edits.len();
+
+        if count == 0 {
+            return VerificationResult {
+                accepted: true,
+                reason: "empty batch".into(),
+                elapsed_ms: 0,
+                verifier: "noop".into(),
+                blast_radius: BlastRadius::HardReject,
+            };
+        }
+
+        let workspace = self.workspace.clone();
+        let edits_owned = edits.to_vec();
+
+        let sandbox_path = match tokio::task::spawn_blocking(move || {
+            let sandbox = sandbox_tempdir()?;
+            copy_workspace(&workspace, &sandbox)?;
+            for edit in &edits_owned {
+                let target = sandbox.join(&edit.relative_path);
+                if let Some(p) = target.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
+                std::fs::write(&target, &edit.new_content)?;
+            }
+            Ok::<PathBuf, std::io::Error>(sandbox)
+        })
+        .await
+        {
+            Ok(Ok(p)) => p,
+            _ => {
+                return VerificationResult {
+                    accepted: false,
+                    reason: "sandbox setup failed — fail-closed per ADR-005".into(),
+                    elapsed_ms: start.elapsed().as_millis() as u64,
+                    verifier: "sandbox".into(),
+                    blast_radius: BlastRadius::HardReject,
+                };
+            }
+        };
+
+        let gate_result = self.inner.check(&sandbox_path).await;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        let cleanup_path = sandbox_path.clone();
+        let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(cleanup_path)).await;
+
+        match gate_result {
+            GateResult::Passed { language } => VerificationResult {
+                accepted: true,
+                reason: format!("batch of {count} file(s): {language} check passed"),
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::Failed { language, output } => VerificationResult {
+                accepted: false,
+                reason: output,
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::Skipped { language } => VerificationResult {
+                accepted: true,
+                reason: format!("batch of {count} file(s): {language} check skipped"),
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::Timeout {
+                language,
+                after_secs,
+            } => VerificationResult {
+                accepted: false,
+                reason: format!(
+                    "batch of {count} file(s): verification timed out after {after_secs}s ({language}) — \
+                     fail-closed to prevent adversarial bypass via slow compile"
+                ),
+                elapsed_ms: elapsed_ms.max(after_secs.saturating_mul(1000)),
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::SpawnFailed { language, reason } => VerificationResult {
+                accepted: false,
+                reason: format!(
+                    "batch of {count} file(s): verifier failed to start ({language}): {reason} — \
+                     fail-closed because an unverifiable edit is not a verified edit"
+                ),
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+        }
+    }
 }
 
 /// Create a uniquely-named temporary directory for the sandbox.
