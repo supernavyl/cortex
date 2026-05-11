@@ -298,36 +298,53 @@ impl OllamaClient {
             }
 
             // Accumulate streaming chunks into a single assembled message.
+            // Line buffer is required: large tool_calls JSON (multi-KB) can span
+            // multiple reqwest bytes-stream items. bytes.split(b'\n') on a partial
+            // fragment silently drops the entire line.
             let mut content = String::new();
             let mut tool_calls: Option<Vec<OllamaToolCall>> = None;
             let mut tokens_in = 0u32;
             let mut tokens_out = 0u32;
             let mut stream = resp.bytes_stream();
+            let mut line_buf: Vec<u8> = Vec::new();
+            let mut done = false;
 
             while let Some(chunk_result) = stream.next().await {
                 let bytes = chunk_result.context("chat stream read error")?;
-                for line in bytes.split(|&b| b == b'\n') {
-                    if line.is_empty() {
-                        continue;
+                for &b in bytes.iter() {
+                    if b == b'\n' {
+                        if !line_buf.is_empty() {
+                            match serde_json::from_slice::<ChatResponse>(&line_buf) {
+                                Ok(chunk) => {
+                                    if let Some(c) = &chunk.message.content {
+                                        content.push_str(c);
+                                    }
+                                    if chunk.message.tool_calls.is_some() {
+                                        tracing::debug!(len = line_buf.len(), "chat: tool_calls chunk received");
+                                        tool_calls = chunk.message.tool_calls.clone();
+                                    }
+                                    if chunk.done {
+                                        tokens_in = chunk.prompt_eval_count;
+                                        tokens_out = chunk.eval_count;
+                                        done = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!(len = line_buf.len(), err = %e, "chat: failed to parse line");
+                                }
+                            }
+                            line_buf.clear();
+                        }
+                    } else {
+                        line_buf.push(b);
                     }
-                    let chunk: ChatResponse = match serde_json::from_slice(line) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    if let Some(c) = &chunk.message.content {
-                        content.push_str(c);
-                    }
-                    if chunk.message.tool_calls.is_some() {
-                        tool_calls = chunk.message.tool_calls.clone();
-                    }
-                    if chunk.done {
-                        tokens_in = chunk.prompt_eval_count;
-                        tokens_out = chunk.eval_count;
-                        break;
-                    }
+                }
+                if done {
+                    break;
                 }
             }
 
+            tracing::debug!(has_tool_calls = tool_calls.is_some(), "chat: response assembled");
             return Ok((
                 ChatMessage {
                     role: "assistant".to_string(),
