@@ -20,6 +20,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
 
 use cortex_core::gate::{SandboxGate, SandboxedEdit};
+use cortex_core::workspace_guard::WorkspaceGuard;
 
 // ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -194,6 +195,62 @@ impl VerificationServer {
             }
         };
 
+        // Workspace boundary check (defense-in-depth: extract_edit may have
+        // produced an unverified relative_path if file_path was already outside).
+        let guard = match WorkspaceGuard::new(&self.workspace) {
+            Ok(g) => g,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "workspace guard init failed for {}: {e}",
+                    self.workspace.display()
+                ))]));
+            }
+        };
+
+        // Derive a relative path string to feed the guard. If the caller passed
+        // an absolute path inside the workspace, strip the prefix. Otherwise
+        // treat the supplied string as already-relative.
+        let supplied = std::path::Path::new(&file_path);
+        let relative_str: String = if supplied.is_absolute() {
+            // Try stripping the canonical workspace prefix first; fall back to
+            // the raw workspace prefix if canonicalization fails (the guard
+            // will still reject any escape).
+            let canon_root = self
+                .workspace
+                .canonicalize()
+                .unwrap_or_else(|_| self.workspace.clone());
+            let canon_supplied = supplied.canonicalize();
+            let stripped_canon = canon_supplied
+                .as_ref()
+                .ok()
+                .and_then(|c| c.strip_prefix(&canon_root).ok())
+                .map(std::path::Path::to_path_buf);
+            let stripped_raw = supplied
+                .strip_prefix(&self.workspace)
+                .ok()
+                .map(std::path::Path::to_path_buf);
+            match stripped_canon.or(stripped_raw) {
+                Some(rel) => rel.to_string_lossy().into_owned(),
+                None => {
+                    return Ok(CallToolResult::error(vec![Content::text(format!(
+                        "file_path '{file_path}' is outside workspace {}",
+                        self.workspace.display()
+                    ))]));
+                }
+            }
+        } else {
+            file_path.clone()
+        };
+
+        let workspace_path = match guard.resolve(&relative_str) {
+            Ok(wp) => wp,
+            Err(e) => {
+                return Ok(CallToolResult::error(vec![Content::text(format!(
+                    "invalid path '{file_path}': {e}"
+                ))]));
+            }
+        };
+
         let vr = self.gate.verify(&edit).await;
 
         if !vr.accepted {
@@ -203,9 +260,9 @@ impl VerificationServer {
             ))]));
         }
 
-        // Gate accepted — write to real filesystem.
+        // Gate accepted — atomic write to real filesystem.
         let new_content = edit.new_content.clone();
-        let abs_path = std::path::Path::new(&file_path);
+        let abs_path = workspace_path.as_path().to_path_buf();
         if let Some(parent) = abs_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
                 return Ok(CallToolResult::error(vec![Content::text(format!(
@@ -213,7 +270,35 @@ impl VerificationServer {
                 ))]));
             }
         }
-        match std::fs::write(abs_path, &new_content) {
+        // Atomic write: temp + fsync + rename. Crash mid-write leaves the original file intact.
+        let tmp_name = format!(
+            ".{}.cortex-tmp-{}-{}",
+            abs_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file"),
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let tmp_path = abs_path
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join(tmp_name);
+        let write_result = (|| -> std::io::Result<()> {
+            use std::io::Write as _;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&tmp_path)?;
+            f.write_all(new_content.as_bytes())?;
+            f.sync_data()?;
+            drop(f);
+            std::fs::rename(&tmp_path, &abs_path)
+        })();
+        match write_result {
             Ok(()) => {
                 let line_count = new_content.lines().count();
                 Ok(CallToolResult::success(vec![Content::text(format!(
@@ -221,9 +306,13 @@ impl VerificationServer {
                     vr.verifier, vr.elapsed_ms,
                 ))]))
             }
-            Err(e) => Ok(CallToolResult::error(vec![Content::text(format!(
-                "gate passed but write failed: {e}"
-            ))])),
+            Err(e) => {
+                // Best-effort cleanup of the temp file on failure.
+                let _ = std::fs::remove_file(&tmp_path);
+                Ok(CallToolResult::error(vec![Content::text(format!(
+                    "gate passed but write failed: {e}"
+                ))]))
+            }
         }
     }
 }
@@ -405,5 +494,62 @@ mod tests {
         assert!(server.get_tool("apply_if_clean").is_some());
         assert!(server.get_tool("bash").is_none());
         assert!(server.get_tool("read_file").is_none());
+    }
+
+    #[tokio::test]
+    async fn apply_if_clean_rejects_path_outside_workspace() {
+        let ws = tmp_workspace("outside");
+        let server = VerificationServer::new(ws.clone());
+
+        // Caller-supplied absolute path that lives entirely outside the workspace.
+        let input = serde_json::json!({
+            "file_path": "/tmp/cortex-evil-target-must-not-be-written.txt",
+            "content": "pub fn add(a: i32, b: i32) -> i32 { a + b }\n"
+        });
+
+        let result = server.handle_apply_if_clean(&input).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "outside-workspace path must be rejected"
+        );
+        // Ensure no file was written at the target.
+        assert!(
+            !std::path::Path::new("/tmp/cortex-evil-target-must-not-be-written.txt").exists(),
+            "rejection must not touch the filesystem outside the workspace"
+        );
+
+        fs::remove_dir_all(ws).unwrap();
+    }
+
+    #[tokio::test]
+    async fn apply_if_clean_rejects_parent_dir_traversal() {
+        let ws = tmp_workspace("traverse");
+        let server = VerificationServer::new(ws.clone());
+
+        // Relative `..` traversal — must be rejected by the guard before any write.
+        let input = serde_json::json!({
+            "file_path": "../escaped.rs",
+            "content": "fn x() {}\n"
+        });
+
+        let result = server.handle_apply_if_clean(&input).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "../ traversal must be rejected"
+        );
+
+        fs::remove_dir_all(ws).unwrap();
+    }
+
+    #[test]
+    fn workspace_guard_rejects_absolute_outside() {
+        // Belt-and-suspenders: lock in WorkspaceGuard's own rejection behavior
+        // from within this crate, so a regression upstream doesn't slip past.
+        let ws = tmp_workspace("guard-abs");
+        let guard = cortex_core::workspace_guard::WorkspaceGuard::new(&ws).expect("guard init");
+        assert!(guard.resolve("/etc/passwd").is_err());
+        assert!(guard.resolve("../foo").is_err());
+
+        fs::remove_dir_all(ws).unwrap();
     }
 }
