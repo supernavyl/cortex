@@ -533,7 +533,8 @@ mod tests {
 
     #[test]
     fn test_agentic_codwrite_with_files_routes_kimi_k2_when_cloud_enabled() {
-        let (models, routing) = test_config();
+        let (mut models, routing) = test_config();
+        models.cloud_enabled = true;
         let prompt = "refactor the authentication module to use JWT tokens \
                       instead of session cookies, update all the middleware \
                       and add proper error handling for expired tokens";
@@ -542,7 +543,6 @@ mod tests {
             "middleware.rs".to_string(),
             "main.rs".to_string(),
         ];
-        // cloud_enabled=true by default → kimi-k2 (native multimodal agentic)
         let sel = route(&models, &routing, prompt, &files, None);
         assert_eq!(sel.model, models.kimi_k2_model);
         assert_eq!(sel.tier_label, "KIMI-K2");
