@@ -1,0 +1,7 @@
+system	task	run_exit	check_pass	test_pass	latency_s	rust_lines
+cortex	rope	1	0	0	0	1
+claude	rope	0	0	0	227	336
+cortex	bloom_filter	1	0	0	0	1
+claude	bloom_filter	0	0	0	80	267
+cortex	lru_threadsafe	1	0	0	0	1
+claude	lru_threadsafe	0	0	0	184	286
