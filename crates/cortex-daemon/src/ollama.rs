@@ -163,7 +163,7 @@ impl OllamaClient {
     ) -> Result<Self, String> {
         let validated = validate_base_url(base_url, allow_remote, allowed_hosts)?;
         let client = Client::builder()
-            .timeout(std::time::Duration::from_secs(600))
+            .timeout(std::time::Duration::from_secs(1800))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_else(|_| Client::new());
