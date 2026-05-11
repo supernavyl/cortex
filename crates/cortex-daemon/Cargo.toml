@@ -26,6 +26,7 @@ reqwest.workspace = true
 rusqlite.workspace = true
 futures.workspace = true
 notify = { version = "8", features = ["macos_kqueue"] }
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -61,6 +61,12 @@ pub struct ModelConfig {
     pub local_max_tokens: u32,
     /// Max tokens for cloud generation.
     pub cloud_max_tokens: u32,
+    /// Hosts allowed for ollama_url. URL host must be in this list.
+    /// Empty list = localhost-only default (127.0.0.1, localhost, ::1).
+    /// Set `allow_remote_ollama = true` AND populate this list to opt into remote.
+    pub allowed_ollama_hosts: Vec<String>,
+    /// Explicitly allow non-localhost ollama_url. Default false.
+    pub allow_remote_ollama: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,9 +139,11 @@ impl Default for ModelConfig {
             gpt_oss_120b_model: "gpt-oss:120b-cloud".to_string(),
             devstral_small2_model: "gpt-oss:20b-cloud".to_string(),
             deepseek_v31_model: "deepseek-v3.1:671b-cloud".to_string(),
-            cloud_enabled: true,
+            cloud_enabled: false,
             local_max_tokens: 32768,
             cloud_max_tokens: 131072,
+            allowed_ollama_hosts: vec![],
+            allow_remote_ollama: false,
         }
     }
 }
@@ -273,6 +281,17 @@ impl Config {
         if let Ok(v) = std::env::var("CORTEX_CLOUD_ENABLED") {
             self.models.cloud_enabled = v != "0" && v != "false";
         }
+        if let Ok(v) = std::env::var("CORTEX_ALLOW_REMOTE_OLLAMA") {
+            self.models.allow_remote_ollama = v == "1" || v.eq_ignore_ascii_case("true");
+        }
+        if let Ok(v) = std::env::var("CORTEX_ALLOWED_OLLAMA_HOSTS") {
+            self.models.allowed_ollama_hosts = v
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+                .collect();
+        }
     }
 }
 
@@ -336,6 +355,28 @@ mod tests {
         assert_eq!(merged.models.code_model, "custom:14b");
         assert_eq!(merged.routing.threshold, 40);
         assert_eq!(merged.models.fast_model, global.models.fast_model);
+    }
+
+    #[test]
+    fn cloud_disabled_by_default() {
+        let config = Config::default();
+        assert!(
+            !config.models.cloud_enabled,
+            "cloud_enabled must default to false to prevent silent cloud exfiltration"
+        );
+    }
+
+    #[test]
+    fn remote_ollama_disabled_by_default() {
+        let config = Config::default();
+        assert!(
+            !config.models.allow_remote_ollama,
+            "allow_remote_ollama must default to false (localhost-only)"
+        );
+        assert!(
+            config.models.allowed_ollama_hosts.is_empty(),
+            "allowed_ollama_hosts must default to empty"
+        );
     }
 
     #[test]

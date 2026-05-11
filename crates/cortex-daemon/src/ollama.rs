@@ -106,17 +106,78 @@ pub struct GenerationStats {
     pub duration_ms: u64,
 }
 
+/// Validate that `base_url` is safe to send prompt data to.
+///
+/// Localhost URLs (`127.0.0.1`, `localhost`, `::1`) are always allowed.
+/// Non-localhost URLs are rejected unless `allow_remote` is true AND the host
+/// is present in `allowed_hosts`. This is the defense against silent prompt
+/// exfiltration via a hijacked `CORTEX_OLLAMA_URL` env var.
+fn validate_base_url(
+    base_url: &str,
+    allow_remote: bool,
+    allowed_hosts: &[String],
+) -> Result<String, String> {
+    let parsed = url::Url::parse(base_url)
+        .map_err(|e| format!("invalid CORTEX_OLLAMA_URL '{base_url}': {e}"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("CORTEX_OLLAMA_URL '{base_url}' has no host"))?;
+    let local = matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
+    if local {
+        return Ok(base_url.trim_end_matches('/').to_string());
+    }
+    if !allow_remote {
+        return Err(format!(
+            "CORTEX_OLLAMA_URL points to '{host}' which is not local. \
+             Set allow_remote_ollama = true in config AND add '{host}' to allowed_ollama_hosts to opt in. \
+             Refusing to avoid silent prompt exfiltration."
+        ));
+    }
+    if !allowed_hosts.iter().any(|h| h == host) {
+        return Err(format!(
+            "CORTEX_OLLAMA_URL host '{host}' is not in allowed_ollama_hosts."
+        ));
+    }
+    Ok(base_url.trim_end_matches('/').to_string())
+}
+
 impl OllamaClient {
+    /// Construct a client that only accepts localhost URLs.
+    ///
+    /// Panics on invalid or non-localhost URLs — this is intentional: it runs
+    /// at startup, and a misconfigured Ollama endpoint must fail loud. Use
+    /// [`OllamaClient::with_remote_policy`] to allow remote hosts explicitly.
     pub fn new(base_url: &str) -> Self {
+        Self::with_remote_policy(base_url, false, &[]).unwrap_or_else(|e| {
+            panic!("ollama endpoint validation failed: {e}");
+        })
+    }
+
+    /// Construct a client with explicit remote-host policy.
+    ///
+    /// Returns `Err` if the URL is invalid or violates the policy. The error
+    /// string is human-readable and safe to surface to the operator.
+    pub fn with_remote_policy(
+        base_url: &str,
+        allow_remote: bool,
+        allowed_hosts: &[String],
+    ) -> Result<Self, String> {
+        let validated = validate_base_url(base_url, allow_remote, allowed_hosts)?;
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .unwrap_or_else(|_| Client::new());
-        Self {
+        // Re-parse for logging — already validated above so this can't fail.
+        let host = url::Url::parse(&validated)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_default();
+        tracing::info!(host = %host, "ollama endpoint");
+        Ok(Self {
             client,
-            base_url: base_url.trim_end_matches('/').to_string(),
-        }
+            base_url: validated,
+        })
     }
 
     /// List available models.
@@ -619,4 +680,60 @@ fn parse_text_tool_calls(text: &str) -> Vec<(String, serde_json::Value)> {
     }
 
     calls
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localhost_url_accepted() {
+        let got = validate_base_url("http://127.0.0.1:11434", false, &[]).unwrap();
+        assert_eq!(got, "http://127.0.0.1:11434");
+    }
+
+    #[test]
+    fn localhost_named_accepted() {
+        let got = validate_base_url("http://localhost:11434", false, &[]).unwrap();
+        assert_eq!(got, "http://localhost:11434");
+    }
+
+    #[test]
+    fn remote_url_rejected_without_opt_in() {
+        let err = validate_base_url("http://attacker.example/", false, &[]).unwrap_err();
+        assert!(
+            err.contains("attacker.example"),
+            "error should mention rejected host, got: {err}"
+        );
+        assert!(
+            err.contains("exfiltration") || err.contains("not local"),
+            "error should explain why, got: {err}"
+        );
+    }
+
+    #[test]
+    fn remote_url_accepted_when_in_allowlist() {
+        let allowed = vec!["attacker.example".to_string()];
+        let got = validate_base_url("http://attacker.example/", true, &allowed).unwrap();
+        assert_eq!(got, "http://attacker.example");
+    }
+
+    #[test]
+    fn remote_url_rejected_when_not_in_allowlist_even_with_flag() {
+        let allowed = vec!["trusted.internal".to_string()];
+        let err = validate_base_url("http://attacker.example/", true, &allowed).unwrap_err();
+        assert!(err.contains("not in allowed_ollama_hosts"), "got: {err}");
+    }
+
+    #[test]
+    fn bad_url_rejected() {
+        let err = validate_base_url("not a url", false, &[]).unwrap_err();
+        assert!(err.contains("invalid CORTEX_OLLAMA_URL"), "got: {err}");
+    }
+
+    #[test]
+    fn trailing_slash_trimmed() {
+        let got = validate_base_url("http://127.0.0.1:11434/", false, &[]).unwrap();
+        assert_eq!(got, "http://127.0.0.1:11434");
+    }
 }
