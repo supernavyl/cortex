@@ -70,8 +70,18 @@ pub enum GateResult {
     Passed { language: Language },
     /// Check failed — compiler/type-checker output is included for the model.
     Failed { language: Language, output: String },
-    /// No check command available for this language or check tool not found.
+    /// No toolchain configured for this language (e.g. mypy/ruff missing in a
+    /// Python workspace). Per ADR-003 Python advise-only policy, this maps to
+    /// pass-through; it is NOT the same as a timeout.
     Skipped { language: Language },
+    /// Verifier exceeded the configured timeout. Fail-closed: the adversarial
+    /// writer must not be allowed to bypass verification by emitting
+    /// slow-to-compile code.
+    Timeout { language: Language, after_secs: u64 },
+    /// Verifier process failed to start (binary missing on the sandbox path,
+    /// permission denied, blocking-task panic, etc.). Fail-closed: an
+    /// unverifiable edit is not a verified edit.
+    SpawnFailed { language: Language, reason: String },
 }
 
 impl GateResult {
@@ -84,6 +94,27 @@ impl GateResult {
     pub fn is_failed(&self) -> bool {
         matches!(self, Self::Failed { .. })
     }
+
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout { .. })
+    }
+
+    #[must_use]
+    pub fn is_spawn_failed(&self) -> bool {
+        matches!(self, Self::SpawnFailed { .. })
+    }
+}
+
+/// Failure modes for `run_with_timeout`. Distinguishes timeout (slow verifier)
+/// from spawn failure (verifier never ran), so the caller can fail-closed on
+/// both but expose distinct reasons.
+#[derive(Debug)]
+enum GateRunError {
+    /// Verifier exceeded the timeout window.
+    Timeout(u64),
+    /// Verifier process could not be spawned, or the blocking task panicked.
+    SpawnFailed(String),
 }
 
 /// Pre-apply verification gate.
@@ -93,15 +124,25 @@ impl GateResult {
 /// if the workspace no longer compiles/type-checks.
 ///
 /// Always enforces package-level correctness (cargo check, tsc --noEmit, mypy).
-#[derive(Debug, Clone, Default)]
-pub struct PreApplyGate;
+#[derive(Debug, Clone)]
+pub struct PreApplyGate {
+    /// Per-verifier timeout in seconds. Defaults to 30.
+    pub timeout_secs: u64,
+}
+
+impl Default for PreApplyGate {
+    fn default() -> Self {
+        Self { timeout_secs: 30 }
+    }
+}
 
 impl PreApplyGate {
     /// Run language-appropriate correctness checks on the workspace.
     ///
     /// Detects all languages present and runs checks for each. Returns the
-    /// first failure, or Passed if all checks pass. Each check is capped at
-    /// 30 seconds to prevent blocking the tokio runtime indefinitely.
+    /// first failure / timeout / spawn-failure, or Passed if all checks pass.
+    /// Each check is capped at 30 seconds (overridden by `SandboxGate`) to
+    /// prevent blocking the tokio runtime indefinitely.
     pub async fn check(&self, workspace: &Path) -> GateResult {
         let languages = Language::detect_all(workspace);
 
@@ -114,7 +155,9 @@ impl PreApplyGate {
                     language: Language::Unknown,
                 },
             };
-            if result.is_failed() {
+            // Fail-closed: any failure, timeout, or spawn-failure short-circuits
+            // and is returned to the caller. Only Passed / Skipped continue.
+            if result.is_failed() || result.is_timeout() || result.is_spawn_failed() {
                 return result;
             }
         }
@@ -133,85 +176,139 @@ impl PreApplyGate {
     }
 
     async fn check_rust(&self, workspace: &Path) -> GateResult {
-        let workspace = workspace.to_path_buf();
-        match run_with_timeout(move || {
-            std::process::Command::new("cargo")
-                .args(["check", "--message-format=short", "--quiet"])
-                .current_dir(&workspace)
+        let workspace_buf = workspace.to_path_buf();
+        let target_dir = shared_cargo_target_dir(&workspace_buf);
+        // `--frozen` (= --locked + --offline) requires Cargo.lock. Without a
+        // lockfile we still pass `--offline` to forbid network fetch — that
+        // satisfies the security goal (no build.rs reaching the network) while
+        // remaining usable on bare workspaces that haven't been resolved yet.
+        let has_lock = workspace_buf.join("Cargo.lock").exists();
+        let timeout_secs = self.timeout_secs;
+
+        let outcome = run_with_timeout(timeout_secs, move || {
+            let mut cmd = std::process::Command::new("cargo");
+            cmd.arg("check")
+                .arg("--message-format=short")
+                .arg("--quiet")
+                .arg("--offline");
+            if has_lock {
+                cmd.arg("--frozen");
+            }
+            cmd.env("CARGO_TARGET_DIR", &target_dir)
+                .current_dir(&workspace_buf)
                 .output()
         })
-        .await
-        {
-            Some(Ok(o)) if o.status.success() => GateResult::Passed {
+        .await;
+
+        match outcome {
+            Ok(o) if o.status.success() => GateResult::Passed {
                 language: Language::Rust,
             },
-            Some(Ok(o)) => GateResult::Failed {
+            Ok(o) => GateResult::Failed {
                 language: Language::Rust,
                 output: combined_output(&o),
             },
-            _ => GateResult::Skipped {
+            Err(GateRunError::Timeout(secs)) => GateResult::Timeout {
                 language: Language::Rust,
+                after_secs: secs,
+            },
+            Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
+                language: Language::Rust,
+                reason,
             },
         }
     }
 
     async fn check_typescript(&self, workspace: &Path) -> GateResult {
         let workspace = workspace.to_path_buf();
-        match run_with_timeout(move || {
+        let timeout_secs = self.timeout_secs;
+        let outcome = run_with_timeout(timeout_secs, move || {
             std::process::Command::new("npx")
                 .args(["--yes", "tsc", "--noEmit"])
                 .current_dir(&workspace)
                 .output()
         })
-        .await
-        {
-            Some(Ok(o)) if o.status.success() => GateResult::Passed {
+        .await;
+
+        match outcome {
+            Ok(o) if o.status.success() => GateResult::Passed {
                 language: Language::TypeScript,
             },
-            Some(Ok(o)) => GateResult::Failed {
+            Ok(o) => GateResult::Failed {
                 language: Language::TypeScript,
                 output: combined_output(&o),
             },
-            _ => GateResult::Skipped {
+            Err(GateRunError::Timeout(secs)) => GateResult::Timeout {
                 language: Language::TypeScript,
+                after_secs: secs,
+            },
+            Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
+                language: Language::TypeScript,
+                reason,
             },
         }
     }
 
     async fn check_python(&self, workspace: &Path) -> GateResult {
         let workspace = workspace.to_path_buf();
-        match run_with_timeout(move || {
+        let timeout_secs = self.timeout_secs;
+        let outcome = run_with_timeout(timeout_secs, move || {
             std::process::Command::new("mypy")
                 .args([".", "--ignore-missing-imports", "--no-error-summary"])
                 .current_dir(&workspace)
                 .output()
         })
-        .await
-        {
-            Some(Ok(o)) if o.status.success() => GateResult::Passed {
+        .await;
+
+        match outcome {
+            Ok(o) if o.status.success() => GateResult::Passed {
                 language: Language::Python,
             },
-            Some(Ok(o)) => GateResult::Failed {
+            Ok(o) => GateResult::Failed {
                 language: Language::Python,
                 output: combined_output(&o),
             },
-            _ => GateResult::Skipped {
+            Err(GateRunError::Timeout(secs)) => GateResult::Timeout {
                 language: Language::Python,
+                after_secs: secs,
+            },
+            Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
+                language: Language::Python,
+                reason,
             },
         }
     }
 }
 
-/// Run a blocking command with a 30s timeout, returning `None` if the timeout
-/// fires or the spawn fails.
-async fn run_with_timeout<F>(f: F) -> Option<std::io::Result<std::process::Output>>
+/// Run a blocking command with the given timeout. Distinguishes timeout from
+/// spawn failure so the caller can fail-closed on both with distinct reasons.
+async fn run_with_timeout<F>(timeout_secs: u64, f: F) -> Result<std::process::Output, GateRunError>
 where
     F: FnOnce() -> std::io::Result<std::process::Output> + Send + 'static,
 {
-    match tokio::time::timeout(Duration::from_secs(30), tokio::task::spawn_blocking(f)).await {
-        Ok(Ok(result)) => Some(result),
-        _ => None,
+    let duration = Duration::from_secs(timeout_secs);
+    match tokio::time::timeout(duration, tokio::task::spawn_blocking(f)).await {
+        Ok(Ok(Ok(output))) => Ok(output),
+        Ok(Ok(Err(io_err))) => Err(GateRunError::SpawnFailed(io_err.to_string())),
+        Ok(Err(join_err)) => Err(GateRunError::SpawnFailed(format!(
+            "blocking task failed: {join_err}"
+        ))),
+        Err(_elapsed) => Err(GateRunError::Timeout(timeout_secs)),
     }
+}
+
+/// Compute a stable per-workspace `CARGO_TARGET_DIR` so sandbox runs share an
+/// incremental cache and avoid cold-cache timeouts.
+fn shared_cargo_target_dir(workspace_root: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let cache_root = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    workspace_root.hash(&mut hasher);
+    let workspace_hash = format!("{:x}", hasher.finish());
+    cache_root.join("cortex/target").join(workspace_hash)
 }
 
 fn combined_output(output: &std::process::Output) -> String {
@@ -271,9 +368,21 @@ pub struct VerificationResult {
     pub blast_radius: BlastRadius,
 }
 
+/// Default verifier timeout for [`SandboxGate`], in seconds.
+///
+/// 60s balances "long enough for a cold-cache cargo check on a small workspace"
+/// against "short enough that an adversarial writer can't deadlock the loop."
+/// The shared `CARGO_TARGET_DIR` makes repeat runs much faster than the first.
+pub const DEFAULT_SANDBOX_TIMEOUT_SECS: u64 = 60;
+
 /// True pre-apply gate: sandboxes the workspace, applies the edit, checks, returns result.
 ///
 /// The real workspace is never modified — safe to call speculatively.
+///
+/// **Fail-closed contract** (ADR-004 / finding C4): if the verifier times out
+/// or fails to spawn, `accepted` is `false`. The previous fail-open behaviour
+/// let an adversarial writer bypass verification by emitting slow-to-compile
+/// code.
 pub struct SandboxGate {
     workspace: PathBuf,
     inner: PreApplyGate,
@@ -281,19 +390,35 @@ pub struct SandboxGate {
 }
 
 impl SandboxGate {
+    /// Construct a `SandboxGate` with the default 60s verifier timeout.
     #[must_use]
     pub fn new(workspace: PathBuf) -> Self {
+        Self::with_timeout(workspace, DEFAULT_SANDBOX_TIMEOUT_SECS)
+    }
+
+    /// Construct a `SandboxGate` with an explicit per-verifier timeout.
+    ///
+    /// A timeout of 0 forces every verifier into the [`GateResult::Timeout`]
+    /// path on the very first poll — useful for fail-closed tests.
+    #[must_use]
+    pub fn with_timeout(workspace: PathBuf, timeout_secs: u64) -> Self {
         Self {
             workspace,
-            inner: PreApplyGate,
-            timeout_secs: 30,
+            inner: PreApplyGate { timeout_secs },
+            timeout_secs,
         }
     }
 
+    /// Read the configured per-verifier timeout in seconds.
     #[must_use]
-    pub fn with_timeout(mut self, secs: u64) -> Self {
-        self.timeout_secs = secs;
-        self
+    pub fn timeout_secs(&self) -> u64 {
+        self.timeout_secs
+    }
+
+    /// Read the workspace root the gate sandboxes against.
+    #[must_use]
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
     }
 
     /// Verify `edit` in a sandbox and return a [`VerificationResult`].
@@ -307,6 +432,9 @@ impl SandboxGate {
         let edit = edit.clone();
 
         // Blocking I/O: create sandbox dir, copy workspace, apply edit.
+        // A failure here is a Cortex infra bug (disk full, permissions),
+        // not adversarial input — we still pass-through so the loop survives,
+        // but the operator-visible reason makes the cause explicit.
         let sandbox_path = match tokio::task::spawn_blocking(move || {
             let sandbox = sandbox_tempdir()?;
             copy_workspace(&workspace, &sandbox)?;
@@ -327,7 +455,7 @@ impl SandboxGate {
                     elapsed_ms: start.elapsed().as_millis() as u64,
                     verifier: "sandbox".into(),
                     blast_radius: BlastRadius::PassThrough,
-                }
+                };
             }
         };
 
@@ -340,6 +468,9 @@ impl SandboxGate {
         let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(cleanup_path)).await;
 
         // Map gate result → VerificationResult using blast radius.
+        // FAIL-CLOSED: Timeout and SpawnFailed map to accepted=false regardless
+        // of blast radius. They are NOT the same as the original Skipped (which
+        // means "no toolchain configured" and is intentionally permissive).
         match gate_result {
             GateResult::Passed { language } => VerificationResult {
                 accepted: true,
@@ -364,6 +495,32 @@ impl SandboxGate {
             GateResult::Skipped { language } => VerificationResult {
                 accepted: true,
                 reason: format!("{language} check skipped"),
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::Timeout {
+                language,
+                after_secs,
+            } => VerificationResult {
+                accepted: false,
+                reason: format!(
+                    "verification timed out after {after_secs}s ({language}) — \
+                     fail-closed to prevent adversarial bypass via slow compile"
+                ),
+                // `after_secs` is the configured timeout, not the actual elapsed
+                // time. Surface elapsed_ms from the wall clock when available;
+                // fall back to the configured ceiling for tests with 0s timeout.
+                elapsed_ms: elapsed_ms.max(after_secs.saturating_mul(1000)),
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
+            GateResult::SpawnFailed { language, reason } => VerificationResult {
+                accepted: false,
+                reason: format!(
+                    "verifier failed to start ({language}): {reason} — \
+                     fail-closed because an unverifiable edit is not a verified edit"
+                ),
                 elapsed_ms,
                 verifier: language.as_str().into(),
                 blast_radius: BlastRadius::for_language(language),
@@ -655,5 +812,86 @@ mod tests {
         );
 
         fs::remove_dir_all(workspace).unwrap();
+    }
+
+    /// Regression for finding C4 (verification gate fails OPEN on timeout).
+    ///
+    /// Before the fix, `run_with_timeout` returned `None` on timeout, which
+    /// the gate mapped to `GateResult::Skipped` → `VerificationResult { accepted: true, .. }`.
+    /// An adversarial writer could exploit this by emitting slow-to-compile
+    /// code, bypassing verification entirely.
+    ///
+    /// The fix: timeout is a distinct enum variant that maps to
+    /// `accepted: false`. We force the timeout path here with `timeout_secs = 0`.
+    #[tokio::test]
+    async fn timeout_yields_rejected_not_accepted() {
+        let dir = tempfile::tempdir().expect("tempdir create");
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"timeouttest\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        // 0s timeout — every cargo invocation must trip the timeout branch
+        // before it can possibly succeed.
+        let gate = SandboxGate::with_timeout(dir.path().to_path_buf(), 0);
+        let edit = SandboxedEdit {
+            relative_path: "src/lib.rs".into(),
+            new_content: "pub fn x() {}".into(),
+        };
+        let result = gate.verify(&edit).await;
+
+        assert!(
+            !result.accepted,
+            "0s timeout must NOT yield accepted=true (was the C4 bug); reason={}",
+            result.reason
+        );
+        assert!(
+            result.reason.contains("timed out"),
+            "reason should name the timeout failure mode; got: {}",
+            result.reason
+        );
+        assert_eq!(
+            gate.timeout_secs(),
+            0,
+            "gate must round-trip the configured timeout"
+        );
+    }
+
+    /// The new constructor and the legacy chained builder should be equivalent
+    /// — adding a stricter constructor must not silently change the default.
+    #[test]
+    fn default_timeout_is_60s() {
+        let dir = std::env::temp_dir().join("cortex-default-timeout-probe");
+        let gate = SandboxGate::new(dir);
+        assert_eq!(gate.timeout_secs(), DEFAULT_SANDBOX_TIMEOUT_SECS);
+        assert_eq!(gate.timeout_secs(), 60);
+    }
+
+    /// Spawn-failure path (verifier binary missing) must fail-closed.
+    /// We can't easily force a missing cargo on PATH inside a unit test, but
+    /// we CAN verify the [`GateResult`] mapping. This keeps the contract honest.
+    #[test]
+    fn spawn_failed_variant_is_not_skipped() {
+        let r = GateResult::SpawnFailed {
+            language: Language::Rust,
+            reason: "cargo not found".into(),
+        };
+        assert!(r.is_spawn_failed());
+        assert!(!r.is_passed());
+        assert!(!r.is_failed());
+    }
+
+    #[test]
+    fn timeout_variant_is_not_skipped() {
+        let r = GateResult::Timeout {
+            language: Language::Rust,
+            after_secs: 30,
+        };
+        assert!(r.is_timeout());
+        assert!(!r.is_passed());
+        assert!(!r.is_failed());
     }
 }
