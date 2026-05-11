@@ -55,9 +55,7 @@ impl Tool for GrepTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: Cow::Borrowed("grep"),
-            description: Cow::Borrowed(
-                "Search file contents with a regex pattern. Uses ripgrep.",
-            ),
+            description: Cow::Borrowed("Search file contents with a regex pattern. Uses ripgrep."),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -99,10 +97,21 @@ pub fn exec_glob(input: &Value) -> Result<String, ToolError> {
         .and_then(Value::as_str)
         .ok_or_else(|| ToolError::new("missing required field: pattern"))?;
 
-    let search_path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or(".");
+    let search_path = input.get("path").and_then(Value::as_str).unwrap_or(".");
+
+    // Reject NUL bytes — argv to execve cannot contain them, and they're a
+    // classic vector for path-truncation tricks if anything downstream re-parses.
+    if search_path.contains('\0') || pattern.contains('\0') {
+        return Err(ToolError::new("invalid input: NUL byte in path or pattern"));
+    }
+
+    // Reject search paths starting with `-` — `find` would interpret them as
+    // expression options (e.g. `-delete`) rather than a path argument.
+    if search_path.starts_with('-') {
+        return Err(ToolError::new(
+            "invalid search_path: must not start with '-'",
+        ));
+    }
 
     let path = Path::new(search_path);
     if !path.is_dir() {
@@ -111,12 +120,13 @@ pub fn exec_glob(input: &Value) -> Result<String, ToolError> {
         )));
     }
 
-    // Use `find` with -name for simple patterns, or fall back to shell glob
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "find {search_path} -name '{pattern}' -type f 2>/dev/null | head -100"
-        ))
+    // Direct argv call to `find` — no shell, no interpolation. Each argument
+    // is passed verbatim through execve, so shell metacharacters in `pattern`
+    // or `search_path` cannot be interpreted as shell syntax.
+    let output = Command::new("find")
+        .arg(search_path)
+        .args(["-type", "f", "-name", pattern])
+        .stderr(std::process::Stdio::null())
         .output()
         .map_err(|e| ToolError::new(format!("glob search failed: {e}")))?;
 
@@ -142,10 +152,7 @@ pub fn exec_grep(input: &Value) -> Result<String, ToolError> {
         .and_then(Value::as_str)
         .ok_or_else(|| ToolError::new("missing required field: pattern"))?;
 
-    let search_path = input
-        .get("path")
-        .and_then(Value::as_str)
-        .unwrap_or(".");
+    let search_path = input.get("path").and_then(Value::as_str).unwrap_or(".");
 
     let case_insensitive = input
         .get("case_insensitive")
@@ -171,9 +178,7 @@ pub fn exec_grep(input: &Value) -> Result<String, ToolError> {
     args.push(pattern.to_string());
     args.push(search_path.to_string());
 
-    let output = Command::new("rg")
-        .args(&args)
-        .output();
+    let output = Command::new("rg").args(&args).output();
 
     let output = match output {
         Ok(o) => o,
@@ -226,5 +231,40 @@ mod tests {
         let result = exec_grep(&input).unwrap();
         // Should find at least the functions we just wrote
         assert!(result.contains("pub fn"));
+    }
+
+    #[test]
+    fn test_glob_rejects_shell_metacharacters() {
+        // Verify a pattern with shell metachars does NOT execute as shell.
+        // If this DID execute as shell, /tmp/cortex-rce-test-<random> would be created.
+        let canary = format!("/tmp/cortex-rce-test-{}", std::process::id());
+        let _ = std::fs::remove_file(&canary);
+        let input = serde_json::json!({
+            "pattern": format!("x'; touch {}; echo '", canary),
+            "path": "/tmp"
+        });
+        let _ = exec_glob(&input); // result may be Ok or Err, both are fine
+        assert!(
+            !std::path::Path::new(&canary).exists(),
+            "command injection succeeded — canary file was created at {canary}"
+        );
+    }
+
+    #[test]
+    fn test_glob_rejects_nul_byte() {
+        let input = serde_json::json!({
+            "pattern": "test\0evil",
+            "path": "/tmp"
+        });
+        assert!(exec_glob(&input).is_err());
+    }
+
+    #[test]
+    fn test_glob_rejects_path_starting_with_dash() {
+        let input = serde_json::json!({
+            "pattern": "*.rs",
+            "path": "-evil"
+        });
+        assert!(exec_glob(&input).is_err());
     }
 }
