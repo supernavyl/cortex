@@ -9,3 +9,4 @@ pub mod router;
 pub mod semaphore;
 pub mod stale_branch;
 pub mod workspace;
+pub mod workspace_guard;
