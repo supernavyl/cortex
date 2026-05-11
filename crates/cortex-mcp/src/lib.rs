@@ -95,6 +95,8 @@ impl ServerHandler for McpServer {
         std::future::ready(Ok(ListToolsResult::with_all_items(tools)))
     }
 
+    // Trait method shape (RPIT) is required by rmcp's ServerHandler.
+    #[allow(clippy::manual_async_fn)]
     fn call_tool(
         &self,
         request: CallToolRequestParams,

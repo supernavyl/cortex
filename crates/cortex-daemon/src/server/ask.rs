@@ -272,12 +272,12 @@ pub(super) async fn handle_ask(
     turn_handle.await??;
 
     // Save exchange to session memory
-    if let Some(sid) = session_id {
-        if let Ok(store) = symbols.lock() {
-            let _ = store.add_message(sid, "user", prompt);
-            if !full_response.is_empty() {
-                let _ = store.add_message(sid, "assistant", &full_response);
-            }
+    if let Some(sid) = session_id
+        && let Ok(store) = symbols.lock()
+    {
+        let _ = store.add_message(sid, "user", prompt);
+        if !full_response.is_empty() {
+            let _ = store.add_message(sid, "assistant", &full_response);
         }
     }
 

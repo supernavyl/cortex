@@ -25,7 +25,7 @@ const GIT_POLL_INTERVAL_SECS: u64 = 30;
 const STALE_CLEANUP_INTERVAL_SECS: u64 = 300;
 
 /// Shared state that the daemon can query for Kairos telemetry.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct KairosState {
     /// Number of incremental re-indexes performed.
     pub reindex_count: u64,
@@ -41,20 +41,6 @@ pub struct KairosState {
     pub hot_files: HashMap<String, u32>,
     /// Last re-index timestamp.
     pub last_reindex: Option<Instant>,
-}
-
-impl Default for KairosState {
-    fn default() -> Self {
-        Self {
-            reindex_count: 0,
-            files_reindexed: 0,
-            files_cleaned: 0,
-            git_branch: None,
-            git_dirty_count: 0,
-            hot_files: HashMap::new(),
-            last_reindex: None,
-        }
-    }
 }
 
 /// The Kairos engine — spawns filesystem watchers and background tasks.
@@ -152,14 +138,14 @@ impl KairosEngine {
             };
 
         for dir in watch_dirs {
-            if dir.exists() {
-                if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
-                    tracing::warn!(
-                        dir = %dir.display(),
-                        error = %e,
-                        "kairos: failed to watch directory"
-                    );
-                }
+            if dir.exists()
+                && let Err(e) = watcher.watch(dir, RecursiveMode::Recursive)
+            {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    error = %e,
+                    "kairos: failed to watch directory"
+                );
             }
         }
 
@@ -307,10 +293,8 @@ async fn git_status_loop(state: Arc<Mutex<KairosState>>, watch_dirs: &[PathBuf])
         st.git_branch = branch;
         st.git_dirty_count = dirty_count;
 
-        if branch_changed {
-            if let Some(ref b) = st.git_branch {
-                tracing::info!(branch = %b, dirty = dirty_count, "kairos: git branch changed");
-            }
+        if branch_changed && let Some(ref b) = st.git_branch {
+            tracing::info!(branch = %b, dirty = dirty_count, "kairos: git branch changed");
         }
     }
 }

@@ -56,9 +56,9 @@ pub(super) fn parse_plan(raw: &str) -> Vec<PlanStep> {
 
             // Parse new step number
             if let Some(num_str) = trimmed
-                .trim_start_matches(|c: char| c == '#' || c == ' ')
+                .trim_start_matches(['#', ' '])
                 .trim_start_matches("step ")
-                .split(|c: char| c == ':' || c == '.')
+                .split([':', '.'])
                 .next()
             {
                 current_num = num_str.trim().parse().unwrap_or(current_num + 1);
@@ -74,7 +74,7 @@ pub(super) fn parse_plan(raw: &str) -> Vec<PlanStep> {
         } else if in_step {
             let lower = trimmed.to_lowercase();
             if lower.starts_with("files:") || lower.starts_with("file:") {
-                let files_str = trimmed.splitn(2, ':').nth(1).unwrap_or("").trim();
+                let files_str = trimmed.split_once(':').map(|x| x.1).unwrap_or("").trim();
                 current_files = files_str
                     .split(',')
                     .map(|f| f.trim().trim_matches('`').to_string())
@@ -83,8 +83,8 @@ pub(super) fn parse_plan(raw: &str) -> Vec<PlanStep> {
             } else if lower.starts_with("verify:") || lower.starts_with("test:") {
                 current_verify = Some(
                     trimmed
-                        .splitn(2, ':')
-                        .nth(1)
+                        .split_once(':')
+                        .map(|x| x.1)
                         .unwrap_or("")
                         .trim()
                         .trim_matches('`')

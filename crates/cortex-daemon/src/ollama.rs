@@ -80,8 +80,6 @@ struct GenerateChunk {
     response: String,
     done: bool,
     #[serde(default)]
-    total_duration: u64,
-    #[serde(default)]
     eval_count: u32,
     #[serde(default)]
     prompt_eval_count: u32,
@@ -103,7 +101,6 @@ pub struct GenerationStats {
     pub model: String,
     pub tokens_in: u32,
     pub tokens_out: u32,
-    pub duration_ms: u64,
 }
 
 /// Validate that `base_url` is safe to send prompt data to.
@@ -218,18 +215,18 @@ impl OllamaClient {
 
         // model_info takes precedence
         for (k, v) in &resp.model_info {
-            if k.to_lowercase().contains("context") {
-                if let Some(n) = v.as_u64() {
-                    return Ok(n as u32);
-                }
+            if k.to_lowercase().contains("context")
+                && let Some(n) = v.as_u64()
+            {
+                return Ok(n as u32);
             }
         }
         // fallback: parameters block
         for line in resp.parameters.lines() {
-            if line.contains("num_ctx") {
-                if let Some(n) = line.split_whitespace().last().and_then(|s| s.parse().ok()) {
-                    return Ok(n);
-                }
+            if line.contains("num_ctx")
+                && let Some(n) = line.split_whitespace().last().and_then(|s| s.parse().ok())
+            {
+                return Ok(n);
             }
         }
         Ok(32768) // safe fallback
@@ -375,7 +372,6 @@ impl OllamaClient {
         let mut stream = resp.bytes_stream();
         let mut tokens_out = 0u32;
         let mut tokens_in = 0u32;
-        let mut duration_ms = 0u64;
 
         while let Some(chunk_result) = stream.next().await {
             let bytes = chunk_result.context("stream read error")?;
@@ -397,7 +393,6 @@ impl OllamaClient {
                             model: model.to_string(),
                             tokens_in,
                             tokens_out,
-                            duration_ms,
                         });
                     }
                 }
@@ -405,7 +400,6 @@ impl OllamaClient {
                 if chunk.done {
                     tokens_in = chunk.prompt_eval_count;
                     tokens_out = chunk.eval_count;
-                    duration_ms = chunk.total_duration / 1_000_000; // ns to ms
                 }
             }
         }
@@ -414,7 +408,6 @@ impl OllamaClient {
             model: model.to_string(),
             tokens_in,
             tokens_out,
-            duration_ms,
         })
     }
 }
@@ -433,15 +426,6 @@ pub struct OllamaModelClient {
 }
 
 impl OllamaModelClient {
-    #[must_use]
-    pub fn new(client: OllamaClient, model: String, context_length: u32) -> Self {
-        Self {
-            client,
-            model,
-            context_length,
-        }
-    }
-
     /// Query the model's real context window and build a client sized to it.
     /// Caps at 32 768 — larger values cause Ollama to allocate multi-GB KV caches even
     /// for short prompts, adding tens of seconds of setup latency.
@@ -599,12 +583,10 @@ impl ModelClient for OllamaModelClient {
                     content_blocks.push(ContentBlock::Text { text: text.clone() });
                 }
             }
-        } else {
-            if let Some(text) = &response.content {
-                if !text.is_empty() {
-                    content_blocks.push(ContentBlock::Text { text: text.clone() });
-                }
-            }
+        } else if let Some(text) = &response.content
+            && !text.is_empty()
+        {
+            content_blocks.push(ContentBlock::Text { text: text.clone() });
         }
 
         if let Some(tool_calls) = &response.tool_calls {
@@ -651,15 +633,15 @@ fn parse_text_tool_calls(text: &str) -> Vec<(String, serde_json::Value)> {
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            if let Some(name) = val.get("name").and_then(|v| v.as_str()).map(String::from) {
-                let args = val
-                    .get("arguments")
-                    .or_else(|| val.get("parameters"))
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Object(Default::default()));
-                calls.push((name, args));
-            }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && let Some(name) = val.get("name").and_then(|v| v.as_str()).map(String::from)
+        {
+            let args = val
+                .get("arguments")
+                .or_else(|| val.get("parameters"))
+                .cloned()
+                .unwrap_or(serde_json::Value::Object(Default::default()));
+            calls.push((name, args));
         }
     }
 
@@ -668,15 +650,15 @@ fn parse_text_tool_calls(text: &str) -> Vec<(String, serde_json::Value)> {
     }
 
     // Fallback: try the whole text as one JSON object
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.trim()) {
-        if let Some(name) = val.get("name").and_then(|v| v.as_str()).map(String::from) {
-            let args = val
-                .get("arguments")
-                .or_else(|| val.get("parameters"))
-                .cloned()
-                .unwrap_or(serde_json::Value::Object(Default::default()));
-            calls.push((name, args));
-        }
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.trim())
+        && let Some(name) = val.get("name").and_then(|v| v.as_str()).map(String::from)
+    {
+        let args = val
+            .get("arguments")
+            .or_else(|| val.get("parameters"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Object(Default::default()));
+        calls.push((name, args));
     }
 
     calls

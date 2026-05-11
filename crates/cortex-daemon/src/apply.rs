@@ -243,7 +243,7 @@ pub async fn run_apply_loop(
                     .await;
                 messages.push(Message::tool_result(
                     tool_id,
-                    &format!("accepted: wrote {safe_path}"),
+                    format!("accepted: wrote {safe_path}"),
                     false,
                 ));
             } else {

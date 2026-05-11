@@ -371,10 +371,7 @@ async fn kill_switch() {
     println!("║           CORTEX KILL SWITCH TEST — SandboxGate catch rate           ║");
     println!("╚══════════════════════════════════════════════════════════════════════╝\n");
 
-    println!(
-        "{:<45} {:>8}  {:>8}  {}",
-        "Edit", "Expected", "Gate", "Reason"
-    );
+    println!("{:<45} {:>8}  {:>8}  Reason", "Edit", "Expected", "Gate");
     println!("{}", "─".repeat(100));
     for (label, expect_rej, rejected, reason) in &rows {
         let expected_str = if *expect_rej { "REJECT" } else { "ACCEPT" };

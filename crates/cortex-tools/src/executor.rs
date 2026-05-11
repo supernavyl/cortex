@@ -134,34 +134,32 @@ impl ToolExecutor {
         // Centralized write-boundary check for all write-capable tools.
         // This survives regardless of which tools are registered — any tool
         // with WorkspaceWrite+ permission gets the boundary enforced.
-        if spec.required_permission >= PermissionMode::WorkspaceWrite {
-            if let Some(path) = input.get("file_path").and_then(Value::as_str) {
-                let p = std::path::Path::new(path);
-                if let PermissionOutcome::Deny { .. } = self.policy.check_file_write(p) {
-                    return Err(ToolError::permission(format!(
-                        "write to '{path}' denied: outside workspace boundary"
-                    )));
-                }
+        if spec.required_permission >= PermissionMode::WorkspaceWrite
+            && let Some(path) = input.get("file_path").and_then(Value::as_str)
+        {
+            let p = std::path::Path::new(path);
+            if let PermissionOutcome::Deny { .. } = self.policy.check_file_write(p) {
+                return Err(ToolError::permission(format!(
+                    "write to '{path}' denied: outside workspace boundary"
+                )));
             }
         }
 
         // Pre-apply sandbox gate: verify proposed edit in a temp copy before
         // touching the real filesystem. Only fires for write_file / edit_file.
-        if spec.required_permission >= PermissionMode::WorkspaceWrite {
-            if let Some(sandbox) = &self.sandbox {
-                if let Some(edit) =
-                    extract_proposed_edit(tool_name, input, self.policy.workspace_root())
-                {
-                    let vr = sandbox.verify(&edit).await;
-                    if !vr.accepted {
-                        // ADR-005: only HardReject exists; fail-closed on any !accepted.
-                        let _ = vr.blast_radius;
-                        return Err(ToolError::new(format!(
-                            "pre-apply gate rejected ({} check):\n{}\n\nFix the errors before proceeding.",
-                            vr.verifier, vr.reason,
-                        )));
-                    }
-                }
+        if spec.required_permission >= PermissionMode::WorkspaceWrite
+            && let Some(sandbox) = &self.sandbox
+            && let Some(edit) =
+                extract_proposed_edit(tool_name, input, self.policy.workspace_root())
+        {
+            let vr = sandbox.verify(&edit).await;
+            if !vr.accepted {
+                // ADR-005: only HardReject exists; fail-closed on any !accepted.
+                let _ = vr.blast_radius;
+                return Err(ToolError::new(format!(
+                    "pre-apply gate rejected ({} check):\n{}\n\nFix the errors before proceeding.",
+                    vr.verifier, vr.reason,
+                )));
             }
         }
 
@@ -170,17 +168,15 @@ impl ToolExecutor {
 
         // Post-write gate: after any successful write, check the workspace is still green.
         // Surfaces compiler errors to the model so it must fix them before continuing.
-        if spec.required_permission >= PermissionMode::WorkspaceWrite {
-            if let (Some(gate), Some(workspace)) = (&self.gate, self.policy.workspace_root()) {
-                if let GateResult::Failed {
-                    language, output, ..
-                } = gate.check(workspace).await
-                {
-                    return Err(ToolError::new(format!(
-                        "pre-apply gate failed ({language} check):\n{output}\n\nFix the errors above before proceeding."
-                    )));
-                }
-            }
+        if spec.required_permission >= PermissionMode::WorkspaceWrite
+            && let (Some(gate), Some(workspace)) = (&self.gate, self.policy.workspace_root())
+            && let GateResult::Failed {
+                language, output, ..
+            } = gate.check(workspace).await
+        {
+            return Err(ToolError::new(format!(
+                "pre-apply gate failed ({language} check):\n{output}\n\nFix the errors above before proceeding."
+            )));
         }
 
         Ok(result)

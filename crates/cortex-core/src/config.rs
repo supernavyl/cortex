@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub daemon: DaemonConfig,
     pub models: ModelConfig,
@@ -97,18 +98,6 @@ pub struct McpServerConfig {
 
 fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string())
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            daemon: DaemonConfig::default(),
-            models: ModelConfig::default(),
-            context: ContextConfig::default(),
-            routing: RoutingConfig::default(),
-            mcp_servers: vec![],
-        }
-    }
 }
 
 impl Default for DaemonConfig {

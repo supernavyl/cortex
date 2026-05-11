@@ -198,10 +198,10 @@ fn count_py_lines_recursive(dir: &std::path::Path) -> u32 {
         let path = entry.path();
         if path.is_dir() {
             total += count_py_lines_recursive(&path);
-        } else if path.extension().is_some_and(|e| e == "py") {
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                total += content.lines().count() as u32;
-            }
+        } else if path.extension().is_some_and(|e| e == "py")
+            && let Ok(content) = std::fs::read_to_string(&path)
+        {
+            total += content.lines().count() as u32;
         }
     }
     total
@@ -267,10 +267,10 @@ async fn run_local_batch(
 /// Run the full benchmark suite.
 ///
 /// Scheduling strategy:
-/// - Local-only  → sequential (one model at a time to avoid VRAM contention).
-/// - Cloud-only  → all pairs concurrent via `JoinSet`.
-/// - Mixed       → cloud and local batches start simultaneously; local still
-///                 serialises internally.
+/// - Local-only → sequential (one model at a time to avoid VRAM contention).
+/// - Cloud-only → all pairs concurrent via `JoinSet`.
+/// - Mixed → cloud and local batches start simultaneously; local still
+///   serialises internally.
 pub async fn run_benchmark(
     models: Vec<String>,
     tasks: &[BenchTask],

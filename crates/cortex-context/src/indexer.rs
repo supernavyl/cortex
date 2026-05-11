@@ -109,11 +109,11 @@ pub fn index_files(
         }
 
         // Check file size
-        if let Ok(metadata) = std::fs::metadata(path) {
-            if metadata.len() > max_file_size {
-                stats.files_skipped += 1;
-                continue;
-            }
+        if let Ok(metadata) = std::fs::metadata(path)
+            && metadata.len() > max_file_size
+        {
+            stats.files_skipped += 1;
+            continue;
         }
 
         // Detect language from extension
@@ -177,10 +177,10 @@ fn index_file(
     store.upsert_file(&path_str, mtime, &content_hash, language, &symbols)?;
 
     // Store content chunks in FTS5 for semantic search — only for valid UTF-8
-    if let Ok(text) = std::str::from_utf8(&content) {
-        if let Err(e) = store.upsert_chunks(&path_str, text) {
-            tracing::debug!(path = %path_str, error = %e, "failed to index chunks");
-        }
+    if let Ok(text) = std::str::from_utf8(&content)
+        && let Err(e) = store.upsert_chunks(&path_str, text)
+    {
+        tracing::debug!(path = %path_str, error = %e, "failed to index chunks");
     }
 
     stats.files_indexed += 1;
@@ -221,17 +221,16 @@ fn walkdir(
             let path = entry.path();
 
             // Skip hidden directories and common noise
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.starts_with('.')
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && (name.starts_with('.')
                     || name == "target"
                     || name == "node_modules"
                     || name == "__pycache__"
                     || name == ".git"
                     || name == "venv"
-                    || name == ".venv"
-                {
-                    continue;
-                }
+                    || name == ".venv")
+            {
+                continue;
             }
 
             if path.is_dir() {
@@ -256,10 +255,10 @@ fn walkdir(
             };
 
             // Check file size
-            if let Ok(metadata) = std::fs::metadata(&path) {
-                if metadata.len() > max_file_size {
-                    continue;
-                }
+            if let Ok(metadata) = std::fs::metadata(&path)
+                && metadata.len() > max_file_size
+            {
+                continue;
             }
 
             results.push(Ok((path, language)));
@@ -304,13 +303,15 @@ mod tests {
             .map(String::from)
             .collect();
 
-        let stats = index_directories(&store, &[tmp.clone()], &extensions, 512 * 1024).unwrap();
+        let stats =
+            index_directories(&store, std::slice::from_ref(&tmp), &extensions, 512 * 1024).unwrap();
 
         assert_eq!(stats.files_indexed, 2);
         assert!(stats.symbols_total >= 3); // hello, Config, greet
 
         // Re-index should skip unchanged files
-        let stats2 = index_directories(&store, &[tmp.clone()], &extensions, 512 * 1024).unwrap();
+        let stats2 =
+            index_directories(&store, std::slice::from_ref(&tmp), &extensions, 512 * 1024).unwrap();
         assert_eq!(stats2.files_skipped, 2);
         assert_eq!(stats2.files_indexed, 0);
 

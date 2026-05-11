@@ -119,6 +119,8 @@ impl ServerHandler for VerificationServer {
         std::future::ready(Ok(ListToolsResult::with_all_items(tools)))
     }
 
+    // Trait method shape (RPIT) is required by rmcp's ServerHandler.
+    #[allow(clippy::manual_async_fn)]
     fn call_tool(
         &self,
         request: CallToolRequestParams,
@@ -263,12 +265,12 @@ impl VerificationServer {
         // Gate accepted — atomic write to real filesystem.
         let new_content = edit.new_content.clone();
         let abs_path = workspace_path.as_path().to_path_buf();
-        if let Some(parent) = abs_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "failed to create directories: {e}"
-                ))]));
-            }
+        if let Some(parent) = abs_path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            return Ok(CallToolResult::error(vec![Content::text(format!(
+                "failed to create directories: {e}"
+            ))]));
         }
         // Atomic write: temp + fsync + rename. Crash mid-write leaves the original file intact.
         let tmp_name = format!(

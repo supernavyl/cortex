@@ -184,7 +184,7 @@ pub async fn run_turn<C: ModelClient>(
 /// Truncate old ToolResult content blocks when the conversation grows beyond
 /// `CONTEXT_CHAR_LIMIT` total characters. The most recent `RECENT_TOOL_RESULTS_KEEP`
 /// results are always left intact so the model retains fresh tool output.
-fn compact_context(messages: &mut Vec<Message>) {
+fn compact_context(messages: &mut [Message]) {
     // Collect positions of all ToolResult blocks, in order
     let mut positions: Vec<(usize, usize)> = Vec::new();
     for (mi, msg) in messages.iter().enumerate() {
@@ -217,11 +217,11 @@ fn compact_context(messages: &mut Vec<Message>) {
 
     let compactable = positions.len() - RECENT_TOOL_RESULTS_KEEP;
     for (mi, bi) in positions.iter().take(compactable) {
-        if let Some(ContentBlock::ToolResult { content, .. }) = messages[*mi].content.get_mut(*bi) {
-            if content.len() > 120 {
-                let preview: String = content.chars().take(100).collect();
-                *content = format!("{preview}… [compacted]");
-            }
+        if let Some(ContentBlock::ToolResult { content, .. }) = messages[*mi].content.get_mut(*bi)
+            && content.len() > 120
+        {
+            let preview: String = content.chars().take(100).collect();
+            *content = format!("{preview}… [compacted]");
         }
     }
 }

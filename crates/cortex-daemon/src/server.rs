@@ -2,11 +2,11 @@
 //!
 //! The heavy per-method logic lives in `server/{ask,apply_handler,debate,implement,research}`.
 //! This file owns:
-//!   - `pub async fn run`      — accept loop and graceful shutdown
+//!   - `pub async fn run` — accept loop and graceful shutdown
 //!   - `async fn handle_client` — dispatches one client connection across IPC methods
-//!   - cross-handler helpers   — `build_system_prompt`, `build_symbol_context`,
-//!                                `collect_model_response`, `pick_better_response`,
-//!                                `send_chunk`, `fmt_ts`, `is_common_word`
+//!   - cross-handler helpers — `build_system_prompt`, `build_symbol_context`,
+//!     `collect_model_response`, `pick_better_response`, `send_chunk`, `fmt_ts`,
+//!     `is_common_word`
 
 use anyhow::{Context, Result};
 use cortex_context::store::SymbolStore;
