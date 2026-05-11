@@ -113,8 +113,8 @@ async fn run_one(
                     last_error = Some(message);
                 }
                 ResponseChunk::Status { message } => {
-                    // Count round transitions by scanning status messages.
-                    if message.contains("round") {
+                    // Only count start-of-round messages: "[APPLY] round N/M..."
+                    if message.starts_with("[APPLY] round ") && message.contains('/') {
                         rounds = rounds.saturating_add(1);
                     }
                 }
@@ -123,8 +123,17 @@ async fn run_one(
         }
     };
 
-    // Apply a hard 120-second timeout per run.
-    if tokio::time::timeout(Duration::from_secs(120), drain_fut)
+    // Scale timeout with expected output size.
+    let timeout_secs = if task.expected_min_lines >= 500 {
+        600u64
+    } else if task.expected_min_lines >= 80 {
+        240
+    } else if task.expected_min_lines >= 50 {
+        180
+    } else {
+        120
+    };
+    if tokio::time::timeout(Duration::from_secs(timeout_secs), drain_fut)
         .await
         .is_err()
     {
@@ -135,12 +144,12 @@ async fn run_one(
             task: task.name.to_string(),
             success: false,
             rounds,
-            latency_ms: 120_000,
+            latency_ms: timeout_secs * 1000,
             tokens_in,
             tokens_out,
             lines_written: 0,
             tok_per_sec: 0.0,
-            error: Some("timeout after 120s".to_string()),
+            error: Some(format!("timeout after {timeout_secs}s")),
         };
     }
 
@@ -179,42 +188,31 @@ async fn run_one(
     }
 }
 
-/// Scan `workspace` for any `.py` file and return its line count, or 0.
-async fn count_written_lines(workspace: &Path, task_name: &str) -> u32 {
-    // The apply loop writes to whatever path the model chose (usually src/<task>.py).
-    // Try the canonical location first.
-    let candidate = workspace.join("src").join(format!("{task_name}.py"));
-    if let Ok(content) = tokio::fs::read_to_string(&candidate).await {
-        return content.lines().count() as u32;
-    }
-
-    // Fallback: walk workspace for any .py file.
-    let Ok(mut read_dir) = tokio::fs::read_dir(workspace).await else {
+/// Recursively sum line counts for all `.py` files under `dir`.
+fn count_py_lines_recursive(dir: &std::path::Path) -> u32 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
-    while let Ok(Some(entry)) = read_dir.next_entry().await {
+    let mut total = 0u32;
+    for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|e| e == "py") {
-            if let Ok(content) = tokio::fs::read_to_string(&path).await {
-                return content.lines().count() as u32;
-            }
-        }
-        // One level deep: try src/
         if path.is_dir() {
-            let Ok(mut sub) = tokio::fs::read_dir(&path).await else {
-                continue;
-            };
-            while let Ok(Some(sub_entry)) = sub.next_entry().await {
-                let sub_path = sub_entry.path();
-                if sub_path.extension().is_some_and(|e| e == "py") {
-                    if let Ok(content) = tokio::fs::read_to_string(&sub_path).await {
-                        return content.lines().count() as u32;
-                    }
-                }
+            total += count_py_lines_recursive(&path);
+        } else if path.extension().is_some_and(|e| e == "py") {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                total += content.lines().count() as u32;
             }
         }
     }
-    0
+    total
+}
+
+/// Scan `workspace` recursively and return total line count across all `.py` files.
+async fn count_written_lines(workspace: &Path, _task_name: &str) -> u32 {
+    let ws = workspace.to_path_buf();
+    tokio::task::spawn_blocking(move || count_py_lines_recursive(&ws))
+        .await
+        .unwrap_or(0)
 }
 
 // ── Batch runners ─────────────────────────────────────────────────────────────
@@ -255,7 +253,6 @@ async fn run_local_batch(
 ) -> Vec<BenchResult> {
     let mut results = Vec::with_capacity(models.len() * tasks.len());
 
-    // Sequential per-model: finish all tasks for model[0] before model[1].
     for model in &models {
         for task in &tasks {
             let r = run_one(model.clone(), task, ollama.clone(), workspace_base.clone()).await;
@@ -307,7 +304,7 @@ pub async fn run_benchmark(
                     local_models,
                     task_vec.clone(),
                     ollama.clone(),
-                    workspace_base.clone()
+                    workspace_base.clone(),
                 ),
                 run_cloud_batch(cloud_models, task_vec, ollama, workspace_base),
             );

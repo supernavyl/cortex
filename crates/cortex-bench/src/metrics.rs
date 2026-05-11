@@ -15,6 +15,13 @@ pub struct BenchResult {
     pub error: Option<String>,
 }
 
+impl BenchResult {
+    /// Total token count for display.
+    pub fn total_tokens(&self) -> u32 {
+        self.tokens_in + self.tokens_out
+    }
+}
+
 /// Aggregated summary for one model across all tasks it ran.
 #[derive(Debug, Clone)]
 pub struct ModelSummary {

@@ -164,26 +164,32 @@ pub fn print_report(results: &[BenchResult], summaries: &[ModelSummary]) {
     println!("── TASK DETAIL ──────────────────────────────────────────────────────────────");
     // Header
     println!(
-        "  {:<20}  {:<model_col$}  {:<6}  {:<8}  {:<6}",
+        "  {:<20}  {:<model_col$}  {:<6}  {:<8}  {:<7}  {:<6}  {:<8}  {:<5}",
         "Task",
         "Model",
         "OK",
         "ms",
-        "rounds",
+        "tok/s",
+        "lines",
+        "tokens",
+        "rnds",
         model_col = model_col
     );
     println!(
         "  {}",
-        "─".repeat(20 + 2 + model_col + 2 + 6 + 2 + 8 + 2 + 6)
+        "─".repeat(20 + 2 + model_col + 2 + 6 + 2 + 8 + 2 + 7 + 2 + 6 + 2 + 8 + 2 + 5)
     );
 
     for r in results {
         println!(
-            "  {:<20}  {:<model_col$}  {:<6}  {:<8}  {:<6}",
+            "  {:<20}  {:<model_col$}  {:<6}  {:<8}  {:<7.1}  {:<6}  {:<8}  {:<5}",
             r.task,
             r.model,
             if r.success { "PASS" } else { "FAIL" },
             r.latency_ms,
+            r.tok_per_sec,
+            r.lines_written,
+            r.total_tokens(),
             r.rounds,
             model_col = model_col
         );

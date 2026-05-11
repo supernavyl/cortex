@@ -23,6 +23,8 @@ struct ChatRequest {
     tools: Vec<serde_json::Value>,
     stream: bool,
     options: Option<GenerateOptions>,
+    /// Unload model after this duration. "0" = unload immediately after response.
+    keep_alive: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,6 +63,7 @@ struct GenerateRequest<'a> {
     prompt: &'a str,
     stream: bool,
     options: Option<GenerateOptions>,
+    keep_alive: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -174,6 +177,7 @@ impl OllamaClient {
     /// Chat completion with tool-use support.
     /// Streams chunks from Ollama and accumulates them so the connection stays
     /// alive during long thinking-model generations (no single-response timeout).
+    /// Retries up to 4 times on 429 with exponential back-off (2s, 4s, 8s, 16s).
     pub async fn chat(
         &self,
         model: &str,
@@ -190,66 +194,86 @@ impl OllamaClient {
                 num_predict: if num_ctx == 0 { 32_768 } else { -1 },
                 num_ctx: if num_ctx == 0 { None } else { Some(num_ctx) },
             }),
+            keep_alive: "0".to_string(),
         };
 
-        let resp = self
-            .client
-            .post(format!("{}/api/chat", self.base_url))
-            .json(&req)
-            .send()
-            .await
-            .context("failed to send chat request to ollama")?;
+        const MAX_RETRIES: u32 = 4;
+        let mut delay_secs = 2u64;
+        let mut last_err = String::new();
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("ollama chat returned {status}: {body}");
-        }
+        for attempt in 0..=MAX_RETRIES {
+            let resp = self
+                .client
+                .post(format!("{}/api/chat", self.base_url))
+                .json(&req)
+                .send()
+                .await
+                .context("failed to send chat request to ollama")?;
 
-        // Accumulate streaming chunks into a single assembled message.
-        let mut content = String::new();
-        let mut tool_calls: Option<Vec<OllamaToolCall>> = None;
-        let mut tokens_in = 0u32;
-        let mut tokens_out = 0u32;
-        let mut stream = resp.bytes_stream();
-
-        while let Some(chunk_result) = stream.next().await {
-            let bytes = chunk_result.context("chat stream read error")?;
-            for line in bytes.split(|&b| b == b'\n') {
-                if line.is_empty() {
+            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                last_err =
+                    format!("ollama chat returned 429 Too Many Requests (attempt {attempt})");
+                if attempt < MAX_RETRIES {
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                    delay_secs *= 2;
                     continue;
                 }
-                let chunk: ChatResponse = match serde_json::from_slice(line) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                };
-                if let Some(c) = &chunk.message.content {
-                    content.push_str(c);
-                }
-                if chunk.message.tool_calls.is_some() {
-                    tool_calls = chunk.message.tool_calls.clone();
-                }
-                if chunk.done {
-                    tokens_in = chunk.prompt_eval_count;
-                    tokens_out = chunk.eval_count;
-                    break;
+                anyhow::bail!("{last_err}");
+            }
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("ollama chat returned {status}: {body}");
+            }
+
+            // Accumulate streaming chunks into a single assembled message.
+            let mut content = String::new();
+            let mut tool_calls: Option<Vec<OllamaToolCall>> = None;
+            let mut tokens_in = 0u32;
+            let mut tokens_out = 0u32;
+            let mut stream = resp.bytes_stream();
+
+            while let Some(chunk_result) = stream.next().await {
+                let bytes = chunk_result.context("chat stream read error")?;
+                for line in bytes.split(|&b| b == b'\n') {
+                    if line.is_empty() {
+                        continue;
+                    }
+                    let chunk: ChatResponse = match serde_json::from_slice(line) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    if let Some(c) = &chunk.message.content {
+                        content.push_str(c);
+                    }
+                    if chunk.message.tool_calls.is_some() {
+                        tool_calls = chunk.message.tool_calls.clone();
+                    }
+                    if chunk.done {
+                        tokens_in = chunk.prompt_eval_count;
+                        tokens_out = chunk.eval_count;
+                        break;
+                    }
                 }
             }
-        }
 
-        Ok((
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: if content.is_empty() {
-                    None
-                } else {
-                    Some(content)
+            return Ok((
+                ChatMessage {
+                    role: "assistant".to_string(),
+                    content: if content.is_empty() {
+                        None
+                    } else {
+                        Some(content)
+                    },
+                    tool_calls,
                 },
-                tool_calls,
-            },
-            tokens_in,
-            tokens_out,
-        ))
+                tokens_in,
+                tokens_out,
+            ));
+        } // end retry loop
+
+        anyhow::bail!("chat failed after {MAX_RETRIES} retries: {last_err}")
     }
 
     /// Stream a completion from a local model.
@@ -270,6 +294,7 @@ impl OllamaClient {
                 num_predict: -1,
                 num_ctx: None,
             }),
+            keep_alive: "0".to_string(),
         };
 
         let resp = self

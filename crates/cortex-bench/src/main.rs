@@ -40,7 +40,6 @@ struct CliArgs {
 fn parse_args() -> Result<CliArgs> {
     let args: Vec<String> = std::env::args().collect();
 
-    // Expect: cortex-bench run [flags...]
     if args.len() < 2 || args[1] != "run" {
         bail!(
             "Usage: cortex-bench run [--models <spec>] [--tasks <spec>] [--ollama <url>]\n\

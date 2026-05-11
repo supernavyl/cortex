@@ -199,6 +199,7 @@ async fn collect(
             tier: Some(tier),
             cwd,
             agentic,
+            session_id: None,
         },
     };
 

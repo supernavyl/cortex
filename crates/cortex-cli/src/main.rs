@@ -68,6 +68,31 @@ enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
+    /// Adversarial debate: WRITER vs CRITIC over 2 refinement rounds.
+    Debate {
+        /// The task / question to debate and refine.
+        prompt: String,
+        /// Files to include as context.
+        #[arg(short, long)]
+        file: Vec<String>,
+        /// Use cloud models instead of local (all parallel, no VRAM limit).
+        #[arg(long)]
+        cloud: bool,
+        /// Cross-debate: local models vs cloud models head-to-head.
+        #[arg(long)]
+        vs: bool,
+    },
+    /// Multi-step autonomous implementation: plan → execute → integrate.
+    Implement {
+        /// Natural-language description of what to build.
+        prompt: String,
+        /// Files to include as context.
+        #[arg(short, long)]
+        file: Vec<String>,
+        /// Use cloud models instead of local.
+        #[arg(long)]
+        cloud: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -157,6 +182,60 @@ async fn main() -> Result<()> {
                     files: file,
                     cwd,
                     model,
+                },
+            };
+
+            if !config.daemon.socket_path.exists() {
+                eprintln!("daemon not running, starting...");
+                start_daemon(&config)?;
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+
+            send_and_stream(&config, request).await?;
+        }
+        Commands::Debate {
+            prompt,
+            file,
+            cloud,
+            vs,
+        } => {
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
+            let request = Request {
+                id: 1,
+                method: Method::Debate {
+                    prompt,
+                    files: file,
+                    cwd,
+                    cloud,
+                    vs,
+                },
+            };
+
+            if !config.daemon.socket_path.exists() {
+                eprintln!("daemon not running, starting...");
+                start_daemon(&config)?;
+                tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+            }
+
+            send_and_stream(&config, request).await?;
+        }
+        Commands::Implement {
+            prompt,
+            file,
+            cloud,
+        } => {
+            let cwd = std::env::current_dir()
+                .ok()
+                .map(|p| p.to_string_lossy().to_string());
+            let request = Request {
+                id: 1,
+                method: Method::Implement {
+                    prompt,
+                    files: file,
+                    cwd,
+                    cloud,
                 },
             };
 

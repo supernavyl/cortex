@@ -1,10 +1,28 @@
-//! SQLite-backed symbol storage.
+//! SQLite-backed symbol storage with session memory.
 
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 
 use crate::symbol::{Language, Symbol, SymbolKind};
+
+/// A stored chat message within a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredMessage {
+    pub role: String,
+    pub content: String,
+    pub timestamp_secs: i64,
+}
+
+/// A named conversation session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
+    pub id: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub message_count: u32,
+}
 
 /// Persistent symbol store backed by SQLite.
 pub struct SymbolStore {
@@ -66,6 +84,23 @@ impl SymbolStore {
                 content,
                 tokenize='porter ascii'
             );
+
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS session_messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                timestamp_secs INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_session_messages_session
+                ON session_messages(session_id, id);
 
             PRAGMA journal_mode=WAL;
             PRAGMA foreign_keys=ON;
@@ -275,6 +310,105 @@ impl SymbolStore {
         rows.collect::<Result<Vec<_>, _>>()
             .context("failed to search chunks")
     }
+
+    // ── Session memory ────────────────────────────────────────────────
+
+    /// Create or touch a session. Returns true if it was newly created.
+    pub fn ensure_session(&self, session_id: &str) -> Result<bool> {
+        let now = unix_now();
+        let existed = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if existed {
+            self.conn.execute(
+                "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+                params![now, session_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "INSERT INTO sessions (id, created_at, updated_at) VALUES (?1, ?2, ?3)",
+                params![session_id, now, now],
+            )?;
+        }
+        Ok(!existed)
+    }
+
+    /// Append a message to a session.
+    pub fn add_message(&self, session_id: &str, role: &str, content: &str) -> Result<()> {
+        self.ensure_session(session_id)?;
+        let now = unix_now();
+        self.conn.execute(
+            "INSERT INTO session_messages (session_id, role, content, timestamp_secs)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![session_id, role, content, now],
+        )?;
+        self.conn.execute(
+            "UPDATE sessions SET updated_at = ?1 WHERE id = ?2",
+            params![now, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// Get the most recent N messages from a session, oldest first.
+    pub fn get_recent_messages(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<StoredMessage>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT role, content, timestamp_secs
+             FROM session_messages
+             WHERE session_id = ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let mut rows: Vec<StoredMessage> = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(StoredMessage {
+                    role: row.get(0)?,
+                    content: row.get(1)?,
+                    timestamp_secs: row.get(2)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
+        Ok(rows)
+    }
+
+    /// List all sessions, newest first.
+    pub fn list_sessions(&self) -> Result<Vec<Session>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.created_at, s.updated_at,
+                    (SELECT COUNT(*) FROM session_messages WHERE session_id = s.id) as msg_count
+             FROM sessions s
+             ORDER BY s.updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(Session {
+                id: row.get(0)?,
+                created_at: row.get(1)?,
+                updated_at: row.get(2)?,
+                message_count: row.get::<_, i64>(3)? as u32,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .context("failed to list sessions")
+    }
+
+    /// Delete a session and all its messages.
+    pub fn delete_session(&self, session_id: &str) -> Result<bool> {
+        let deleted = self
+            .conn
+            .execute("DELETE FROM sessions WHERE id = ?1", params![session_id])?;
+        Ok(deleted > 0)
+    }
 }
 
 /// A matched code chunk from FTS5 search.
@@ -306,6 +440,13 @@ fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
         parent_name: row.get(8)?,
         signature: row.get(9)?,
     })
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 #[cfg(test)]

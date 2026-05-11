@@ -63,6 +63,30 @@ pub enum Method {
         question: String,
         depth: ResearchDepth,
     },
+    /// Adversarial debate: WRITER (agentic) vs CRITIC (ruthless review), 3 rounds.
+    Debate {
+        prompt: String,
+        files: Vec<String>,
+        /// CLI's current working directory for workspace detection.
+        #[serde(default)]
+        cwd: Option<String>,
+        /// Use cloud models instead of local (all parallel, no VRAM limit).
+        #[serde(default)]
+        cloud: bool,
+        /// Cross-debate: local WRITER vs cloud CRITIC, then cloud WRITER vs local CRITIC.
+        #[serde(default)]
+        vs: bool,
+    },
+    /// Multi-step autonomous implementation: plan → execute each step → integrate → report.
+    Implement {
+        prompt: String,
+        files: Vec<String>,
+        #[serde(default)]
+        cwd: Option<String>,
+        /// Use cloud models instead of local.
+        #[serde(default)]
+        cloud: bool,
+    },
 }
 
 /// Research depth for multi-agent pipeline.

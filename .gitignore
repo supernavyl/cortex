@@ -1,6 +1,3 @@
 /target
-__pycache__/
-*.pyc
-*.pyo
-.pytest_cache/
-
+/.cortex-target-cache
+*.cortex-tmp-*
