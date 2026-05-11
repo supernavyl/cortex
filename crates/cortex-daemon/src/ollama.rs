@@ -69,7 +69,9 @@ struct GenerateRequest<'a> {
 #[derive(Debug, Serialize)]
 struct GenerateOptions {
     /// -1 = generate until model's natural stop (no artificial cap).
-    num_predict: i32,
+    /// Omit for cloud models — the remote server controls generation limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    num_predict: Option<i32>,
     /// Active context window — set to model's reported maximum.
     #[serde(skip_serializing_if = "Option::is_none")]
     num_ctx: Option<u32>,
@@ -243,15 +245,25 @@ impl OllamaClient {
         tools: Vec<serde_json::Value>,
         num_ctx: u32,
     ) -> Result<(ChatMessage, u32, u32)> {
+        // Cloud models (num_ctx == 0 sentinel): send no options — the remote server
+        // controls context window and generation length.  Sending num_predict=32768
+        // would cap thinking-model output before the tool call is emitted.
+        // Local models: set num_ctx to the reported window; let generation run until
+        // the model's natural EOS (num_predict=-1).
+        let options = if num_ctx == 0 {
+            None
+        } else {
+            Some(GenerateOptions {
+                num_predict: Some(-1),
+                num_ctx: Some(num_ctx),
+            })
+        };
         let req = ChatRequest {
             model: model.to_string(),
             messages,
             tools,
             stream: true,
-            options: Some(GenerateOptions {
-                num_predict: if num_ctx == 0 { 32_768 } else { -1 },
-                num_ctx: if num_ctx == 0 { None } else { Some(num_ctx) },
-            }),
+            options,
             keep_alive: "0".to_string(),
         };
 
@@ -349,7 +361,7 @@ impl OllamaClient {
             prompt,
             stream: true,
             options: Some(GenerateOptions {
-                num_predict: -1,
+                num_predict: Some(-1),
                 num_ctx: None,
             }),
             keep_alive: "0".to_string(),
