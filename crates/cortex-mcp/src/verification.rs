@@ -191,7 +191,7 @@ impl VerificationServer {
             None => {
                 return Ok(CallToolResult::error(vec![Content::text(
                     "missing file_path",
-                )]))
+                )]));
             }
         };
 
@@ -444,8 +444,7 @@ mod tests {
         let ws = tmp_workspace("apply");
         let server = VerificationServer::new(ws.clone());
         let file = ws.join("src/lib.rs");
-        let new_content =
-            "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { a * b }\n";
+        let new_content = "pub fn add(a: i32, b: i32) -> i32 { a + b }\npub fn mul(a: i32, b: i32) -> i32 { a * b }\n";
 
         let input = serde_json::json!({
             "file_path": file.to_str().unwrap(),

@@ -99,9 +99,7 @@ impl PermissionPolicy {
         }
         // WorkspaceWrite: check path is within workspace
         if let Some(root) = &self.workspace_root {
-            let canonical = path
-                .canonicalize()
-                .unwrap_or_else(|_| path.to_path_buf());
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
             if canonical.starts_with(root) {
                 PermissionOutcome::Allow
             } else {

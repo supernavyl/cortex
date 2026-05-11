@@ -150,8 +150,8 @@ pub fn exec_read_file(input: &Value) -> Result<String, ToolError> {
         return Err(ToolError::new(format!("file not found: {file_path}")));
     }
 
-    let metadata = fs::metadata(path)
-        .map_err(|e| ToolError::new(format!("cannot read metadata: {e}")))?;
+    let metadata =
+        fs::metadata(path).map_err(|e| ToolError::new(format!("cannot read metadata: {e}")))?;
 
     if metadata.len() > MAX_READ_BYTES {
         return Err(ToolError::new(format!(
@@ -162,8 +162,8 @@ pub fn exec_read_file(input: &Value) -> Result<String, ToolError> {
     }
 
     // Check for binary content
-    let content = fs::read(path)
-        .map_err(|e| ToolError::new(format!("failed to read file: {e}")))?;
+    let content =
+        fs::read(path).map_err(|e| ToolError::new(format!("failed to read file: {e}")))?;
 
     if is_binary(&content) {
         return Err(ToolError::new(format!(
@@ -230,8 +230,7 @@ pub fn exec_write_file(input: &Value) -> Result<String, ToolError> {
     }
 
     let existed = path.exists();
-    fs::write(path, content)
-        .map_err(|e| ToolError::new(format!("failed to write file: {e}")))?;
+    fs::write(path, content).map_err(|e| ToolError::new(format!("failed to write file: {e}")))?;
 
     let verb = if existed { "updated" } else { "created" };
     let line_count = content.lines().count();
@@ -272,9 +271,7 @@ pub fn exec_edit_file(input: &Value) -> Result<String, ToolError> {
         .map_err(|e| ToolError::new(format!("failed to read file: {e}")))?;
 
     if old_string == new_string {
-        return Err(ToolError::new(
-            "old_string and new_string are identical",
-        ));
+        return Err(ToolError::new("old_string and new_string are identical"));
     }
 
     let occurrences = content.matches(old_string).count();

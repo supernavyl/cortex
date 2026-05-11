@@ -16,7 +16,7 @@ use cortex_core::protocol::ResponseChunk;
 use cortex_daemon::apply::run_apply_loop;
 use cortex_daemon::ollama::OllamaClient;
 
-use crate::metrics::{is_cloud, BenchResult};
+use crate::metrics::{BenchResult, is_cloud};
 use crate::tasks::BenchTask;
 
 // ── Per-run helper ────────────────────────────────────────────────────────────

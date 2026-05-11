@@ -3,7 +3,7 @@
 //! Tests requiring qwen3.6:27b are gated on CORTEX_APPLY_INTEGRATION_TESTS=1.
 
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 
 // ---------------------------------------------------------------------------
 // Helpers

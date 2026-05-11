@@ -46,9 +46,7 @@ impl Message {
     pub fn user(text: impl Into<String>) -> Self {
         Self {
             role: Role::User,
-            content: vec![ContentBlock::Text {
-                text: text.into(),
-            }],
+            content: vec![ContentBlock::Text { text: text.into() }],
         }
     }
 
@@ -56,9 +54,7 @@ impl Message {
     pub fn assistant_text(text: impl Into<String>) -> Self {
         Self {
             role: Role::Assistant,
-            content: vec![ContentBlock::Text {
-                text: text.into(),
-            }],
+            content: vec![ContentBlock::Text { text: text.into() }],
         }
     }
 
@@ -83,7 +79,9 @@ impl Message {
         self.content
             .iter()
             .filter_map(|block| match block {
-                ContentBlock::ToolUse { id, name, input } => Some((id.as_str(), name.as_str(), input)),
+                ContentBlock::ToolUse { id, name, input } => {
+                    Some((id.as_str(), name.as_str(), input))
+                }
                 _ => None,
             })
             .collect()

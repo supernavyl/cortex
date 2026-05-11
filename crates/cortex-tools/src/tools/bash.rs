@@ -19,9 +19,7 @@ impl Tool for BashTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: Cow::Borrowed("bash"),
-            description: Cow::Borrowed(
-                "Execute a shell command and return stdout/stderr.",
-            ),
+            description: Cow::Borrowed("Execute a shell command and return stdout/stderr."),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -71,10 +69,7 @@ pub async fn exec_bash(input: &Value) -> Result<String, ToolError> {
 
     let result = tokio::time::timeout(
         Duration::from_millis(timeout_ms),
-        Command::new("sh")
-            .arg("-lc")
-            .arg(command)
-            .output(),
+        Command::new("sh").arg("-lc").arg(command).output(),
     )
     .await;
 

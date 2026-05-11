@@ -3,10 +3,10 @@
 //! Spawns MCP server subprocesses, discovers their tools, and bridges them
 //! into the CORTEX tool executor as `Box<dyn Tool>` instances.
 
+use rmcp::ServiceExt;
 use rmcp::model::{CallToolRequestParams, CallToolResult, RawContent};
 use rmcp::service::{RoleClient, RunningService};
 use rmcp::transport::TokioChildProcess;
-use rmcp::ServiceExt;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::future::Future;

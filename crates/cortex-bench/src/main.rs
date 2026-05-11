@@ -16,14 +16,14 @@ mod tasks;
 
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use cortex_core::config::Config;
 use cortex_daemon::ollama::OllamaClient;
 
 use metrics::summarize;
 use report::print_report;
 use runner::run_benchmark;
-use tasks::{find_task, BenchTask, ALL_TASKS};
+use tasks::{ALL_TASKS, BenchTask, find_task};
 
 // ── Default quick-bench models ────────────────────────────────────────────────
 
