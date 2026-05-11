@@ -1,6 +1,6 @@
 //! Tool executor with trait-based dispatch.
 
-use cortex_core::gate::{BlastRadius, GateResult, PreApplyGate, SandboxGate, SandboxedEdit};
+use cortex_core::gate::{GateResult, PreApplyGate, SandboxGate, SandboxedEdit};
 use serde_json::Value;
 
 use crate::plugin::Tool;
@@ -154,13 +154,10 @@ impl ToolExecutor {
                 {
                     let vr = sandbox.verify(&edit).await;
                     if !vr.accepted {
-                        let severity = match vr.blast_radius {
-                            BlastRadius::HardReject => "rejected",
-                            BlastRadius::Warn => "warning",
-                            _ => "info",
-                        };
+                        // ADR-005: only HardReject exists; fail-closed on any !accepted.
+                        let _ = vr.blast_radius;
                         return Err(ToolError::new(format!(
-                            "pre-apply gate {severity} ({} check):\n{}\n\nFix the errors before proceeding.",
+                            "pre-apply gate rejected ({} check):\n{}\n\nFix the errors before proceeding.",
                             vr.verifier, vr.reason,
                         )));
                     }

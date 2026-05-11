@@ -1,58 +1,48 @@
-//! Pre-apply verification gate.
+//! Pre-apply verification gate (Rust-only per ADR-005).
 //!
 //! Two gate types:
-//! - [`PreApplyGate`]: post-write check on the real workspace (existing behaviour).
-//! - [`SandboxGate`]: true pre-apply check — copies workspace to a tempdir, applies
-//!   the proposed edit there, runs checks, and returns accept/reject without ever
-//!   touching the real filesystem.
+//! - [`PreApplyGate`]: post-write check on the real workspace.
+//! - [`SandboxGate`]: pre-apply check — copies workspace to a tempdir, applies
+//!   the proposed edit there, runs `cargo check`, returns accept/reject
+//!   without ever touching the real filesystem.
+//!
+//! Non-Rust workspaces return [`GateResult::SpawnFailed`] and fail-closed.
+//! See `docs/adr/ADR-005-rust-only-verification-scope.md`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// Detected project language, resolved from marker files.
+///
+/// Cortex is Rust-only per ADR-005. `Other` is preserved so non-Rust workspaces
+/// have a typed identity for the fail-closed dispatch in [`PreApplyGate::check`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
     Rust,
-    TypeScript,
-    Python,
-    Unknown,
+    /// Any non-Rust workspace. Always fail-closed per ADR-005.
+    Other,
 }
 
 impl Language {
-    /// Detect all project languages from marker files in the workspace root.
+    /// Detect project languages from marker files in the workspace root.
     ///
-    /// Unlike a single-language detector, this scans for all marker types
-    /// so polyglot workspaces get all relevant checks run.
+    /// Returns `vec![Rust]` if a `Cargo.toml` is present at the root, else
+    /// `vec![Other]`. The return shape is preserved (Vec) for caller-side
+    /// compatibility, but it always contains exactly one element.
     #[must_use]
     pub fn detect_all(workspace: &Path) -> Vec<Self> {
-        let mut langs = Vec::new();
         if workspace.join("Cargo.toml").exists() {
-            langs.push(Self::Rust);
+            vec![Self::Rust]
+        } else {
+            vec![Self::Other]
         }
-        if workspace.join("tsconfig.json").exists() || workspace.join("package.json").exists() {
-            langs.push(Self::TypeScript);
-        }
-        if workspace.join("pyproject.toml").exists()
-            || workspace.join("setup.py").exists()
-            || workspace.join("setup.cfg").exists()
-            || workspace.join("requirements.txt").exists()
-            || has_py_files(workspace)
-        {
-            langs.push(Self::Python);
-        }
-        if langs.is_empty() {
-            langs.push(Self::Unknown);
-        }
-        langs
     }
 
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Rust => "rust",
-            Self::TypeScript => "typescript",
-            Self::Python => "python",
-            Self::Unknown => "unknown",
+            Self::Other => "other",
         }
     }
 }
@@ -66,20 +56,21 @@ impl std::fmt::Display for Language {
 /// Result of running the pre-apply gate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GateResult {
-    /// Check passed — workspace compiles/type-checks cleanly.
+    /// Check passed — workspace compiles cleanly.
     Passed { language: Language },
-    /// Check failed — compiler/type-checker output is included for the model.
+    /// Check failed — compiler output is included for the model.
     Failed { language: Language, output: String },
-    /// No toolchain configured for this language (e.g. mypy/ruff missing in a
-    /// Python workspace). Per ADR-003 Python advise-only policy, this maps to
-    /// pass-through; it is NOT the same as a timeout.
+    /// No toolchain configured for this language. Retained for API stability;
+    /// unreachable under the Rust-only policy (ADR-005) but kept because the
+    /// variant is documented as intentionally permissive.
     Skipped { language: Language },
     /// Verifier exceeded the configured timeout. Fail-closed: the adversarial
     /// writer must not be allowed to bypass verification by emitting
     /// slow-to-compile code.
     Timeout { language: Language, after_secs: u64 },
     /// Verifier process failed to start (binary missing on the sandbox path,
-    /// permission denied, blocking-task panic, etc.). Fail-closed: an
+    /// permission denied, blocking-task panic, etc.) OR the workspace is not
+    /// a Rust workspace (ADR-005 Rust-only policy). Fail-closed: an
     /// unverifiable edit is not a verified edit.
     SpawnFailed { language: Language, reason: String },
 }
@@ -121,9 +112,10 @@ enum GateRunError {
 ///
 /// Attach to a `ToolExecutor` via `ToolExecutor::enable_gate()`. The gate
 /// runs after every successful write-capable tool call and blocks the turn
-/// if the workspace no longer compiles/type-checks.
+/// if the workspace no longer compiles.
 ///
-/// Always enforces package-level correctness (cargo check, tsc --noEmit, mypy).
+/// Per ADR-005, only Rust workspaces are verified; non-Rust workspaces
+/// fail-closed with [`GateResult::SpawnFailed`].
 #[derive(Debug, Clone)]
 pub struct PreApplyGate {
     /// Per-verifier timeout in seconds. Defaults to 30.
@@ -139,39 +131,22 @@ impl Default for PreApplyGate {
 impl PreApplyGate {
     /// Run language-appropriate correctness checks on the workspace.
     ///
-    /// Detects all languages present and runs checks for each. Returns the
-    /// first failure / timeout / spawn-failure, or Passed if all checks pass.
-    /// Each check is capped at 30 seconds (overridden by `SandboxGate`) to
-    /// prevent blocking the tokio runtime indefinitely.
+    /// Per ADR-005, cortex is Rust-only. A Rust workspace runs `cargo check`;
+    /// any non-Rust workspace returns [`GateResult::SpawnFailed`] and is
+    /// rejected by [`SandboxGate::verify`]. The 30s default timeout caps each
+    /// invocation to keep the tokio runtime responsive.
     pub async fn check(&self, workspace: &Path) -> GateResult {
+        // ADR-005: dispatch on detected language. detect_all returns exactly one
+        // entry: Rust if Cargo.toml is present, else Other.
         let languages = Language::detect_all(workspace);
+        let lang = languages.first().copied().unwrap_or(Language::Other);
 
-        for lang in languages {
-            let result = match lang {
-                Language::Rust => self.check_rust(workspace).await,
-                Language::TypeScript => self.check_typescript(workspace).await,
-                Language::Python => self.check_python(workspace).await,
-                Language::Unknown => GateResult::Skipped {
-                    language: Language::Unknown,
-                },
-            };
-            // Fail-closed: any failure, timeout, or spawn-failure short-circuits
-            // and is returned to the caller. Only Passed / Skipped continue.
-            if result.is_failed() || result.is_timeout() || result.is_spawn_failed() {
-                return result;
-            }
-        }
-
-        // If we got here, all checks passed or were skipped. Return the first
-        // non-Unknown language's pass, or Skipped if only Unknown was detected.
-        let languages = Language::detect_all(workspace);
-        for lang in languages {
-            if lang != Language::Unknown {
-                return GateResult::Passed { language: lang };
-            }
-        }
-        GateResult::Skipped {
-            language: Language::Unknown,
+        match lang {
+            Language::Rust => self.check_rust(workspace).await,
+            Language::Other => GateResult::SpawnFailed {
+                language: Language::Other,
+                reason: "cortex Rust-only per ADR-005; non-Rust workspace not supported".into(),
+            },
         }
     }
 
@@ -214,66 +189,6 @@ impl PreApplyGate {
             },
             Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
                 language: Language::Rust,
-                reason,
-            },
-        }
-    }
-
-    async fn check_typescript(&self, workspace: &Path) -> GateResult {
-        let workspace = workspace.to_path_buf();
-        let timeout_secs = self.timeout_secs;
-        let outcome = run_with_timeout(timeout_secs, move || {
-            std::process::Command::new("npx")
-                .args(["--yes", "tsc", "--noEmit"])
-                .current_dir(&workspace)
-                .output()
-        })
-        .await;
-
-        match outcome {
-            Ok(o) if o.status.success() => GateResult::Passed {
-                language: Language::TypeScript,
-            },
-            Ok(o) => GateResult::Failed {
-                language: Language::TypeScript,
-                output: combined_output(&o),
-            },
-            Err(GateRunError::Timeout(secs)) => GateResult::Timeout {
-                language: Language::TypeScript,
-                after_secs: secs,
-            },
-            Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
-                language: Language::TypeScript,
-                reason,
-            },
-        }
-    }
-
-    async fn check_python(&self, workspace: &Path) -> GateResult {
-        let workspace = workspace.to_path_buf();
-        let timeout_secs = self.timeout_secs;
-        let outcome = run_with_timeout(timeout_secs, move || {
-            std::process::Command::new("mypy")
-                .args([".", "--ignore-missing-imports", "--no-error-summary"])
-                .current_dir(&workspace)
-                .output()
-        })
-        .await;
-
-        match outcome {
-            Ok(o) if o.status.success() => GateResult::Passed {
-                language: Language::Python,
-            },
-            Ok(o) => GateResult::Failed {
-                language: Language::Python,
-                output: combined_output(&o),
-            },
-            Err(GateRunError::Timeout(secs)) => GateResult::Timeout {
-                language: Language::Python,
-                after_secs: secs,
-            },
-            Err(GateRunError::SpawnFailed(reason)) => GateResult::SpawnFailed {
-                language: Language::Python,
                 reason,
             },
         }
@@ -325,27 +240,21 @@ fn combined_output(output: &std::process::Output) -> String {
 // ── Sandbox pre-apply gate ────────────────────────────────────────────────────
 
 /// Language-calibrated enforcement level for the pre-apply gate.
+///
+/// Per ADR-005, only `HardReject` remains. The verification-first thesis is
+/// fail-closed by definition; any softer mode (Warn/Advise/PassThrough) was a
+/// silent fail-open and has been removed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlastRadius {
     /// Gate failure blocks the edit entirely.
     HardReject,
-    /// Gate failure is returned to the caller but does not block.
-    Warn,
-    /// Gate failure is noted; edit proceeds regardless.
-    Advise,
-    /// No check is performed for this language.
-    PassThrough,
 }
 
 impl BlastRadius {
+    /// All languages map to `HardReject` per ADR-005.
     #[must_use]
-    pub fn for_language(lang: Language) -> Self {
-        match lang {
-            Language::Rust => Self::HardReject,
-            Language::TypeScript => Self::Warn,
-            Language::Python => Self::Advise,
-            Language::Unknown => Self::PassThrough,
-        }
+    pub fn for_language(_lang: Language) -> Self {
+        Self::HardReject
     }
 }
 
@@ -383,6 +292,10 @@ pub const DEFAULT_SANDBOX_TIMEOUT_SECS: u64 = 60;
 /// or fails to spawn, `accepted` is `false`. The previous fail-open behaviour
 /// let an adversarial writer bypass verification by emitting slow-to-compile
 /// code.
+///
+/// **Rust-only contract** (ADR-005): non-Rust workspaces always return
+/// `accepted: false` via the `SpawnFailed` path. There is no Advise / Warn /
+/// PassThrough mode.
 pub struct SandboxGate {
     workspace: PathBuf,
     inner: PreApplyGate,
@@ -433,8 +346,9 @@ impl SandboxGate {
 
         // Blocking I/O: create sandbox dir, copy workspace, apply edit.
         // A failure here is a Cortex infra bug (disk full, permissions),
-        // not adversarial input — we still pass-through so the loop survives,
-        // but the operator-visible reason makes the cause explicit.
+        // not adversarial input — we still fail-closed so the loop survives
+        // without silently bypassing verification, and the operator-visible
+        // reason makes the cause explicit.
         let sandbox_path = match tokio::task::spawn_blocking(move || {
             let sandbox = sandbox_tempdir()?;
             copy_workspace(&workspace, &sandbox)?;
@@ -450,11 +364,11 @@ impl SandboxGate {
             Ok(Ok(p)) => p,
             _ => {
                 return VerificationResult {
-                    accepted: true,
-                    reason: "sandbox setup failed — skipping gate".into(),
+                    accepted: false,
+                    reason: "sandbox setup failed — fail-closed per ADR-005".into(),
                     elapsed_ms: start.elapsed().as_millis() as u64,
                     verifier: "sandbox".into(),
-                    blast_radius: BlastRadius::PassThrough,
+                    blast_radius: BlastRadius::HardReject,
                 };
             }
         };
@@ -467,10 +381,10 @@ impl SandboxGate {
         let cleanup_path = sandbox_path.clone();
         let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(cleanup_path)).await;
 
-        // Map gate result → VerificationResult using blast radius.
-        // FAIL-CLOSED: Timeout and SpawnFailed map to accepted=false regardless
-        // of blast radius. They are NOT the same as the original Skipped (which
-        // means "no toolchain configured" and is intentionally permissive).
+        // Map gate result → VerificationResult. With ADR-005, only HardReject
+        // exists; Failed is always accepted=false. Timeout and SpawnFailed
+        // remain fail-closed (ADR-004 C4 contract). Skipped is preserved for
+        // API stability but is unreachable under Rust-only dispatch.
         match gate_result {
             GateResult::Passed { language } => VerificationResult {
                 accepted: true,
@@ -479,19 +393,13 @@ impl SandboxGate {
                 verifier: language.as_str().into(),
                 blast_radius: BlastRadius::for_language(language),
             },
-            GateResult::Failed { language, output } => {
-                let blast_radius = BlastRadius::for_language(language);
-                VerificationResult {
-                    accepted: matches!(
-                        blast_radius,
-                        BlastRadius::Advise | BlastRadius::PassThrough
-                    ),
-                    reason: output,
-                    elapsed_ms,
-                    verifier: language.as_str().into(),
-                    blast_radius,
-                }
-            }
+            GateResult::Failed { language, output } => VerificationResult {
+                accepted: false,
+                reason: output,
+                elapsed_ms,
+                verifier: language.as_str().into(),
+                blast_radius: BlastRadius::for_language(language),
+            },
             GateResult::Skipped { language } => VerificationResult {
                 accepted: true,
                 reason: format!("{language} check skipped"),
@@ -539,31 +447,6 @@ fn sandbox_tempdir() -> std::io::Result<PathBuf> {
     let dir = std::env::temp_dir().join(format!("cortex-sandbox-{nanos}"));
     std::fs::create_dir_all(&dir)?;
     Ok(dir)
-}
-
-/// Check if `workspace` contains any `.py` files within the first two directory levels.
-/// Used to detect bare Python projects that have no manifest yet.
-fn has_py_files(workspace: &Path) -> bool {
-    let Ok(top) = std::fs::read_dir(workspace) else {
-        return false;
-    };
-    for entry in top.flatten() {
-        let path = entry.path();
-        if path.extension().is_some_and(|e| e == "py") {
-            return true;
-        }
-        if path.is_dir() {
-            if let Ok(sub) = std::fs::read_dir(&path) {
-                if sub
-                    .flatten()
-                    .any(|e| e.path().extension().is_some_and(|ext| ext == "py"))
-                {
-                    return true;
-                }
-            }
-        }
-    }
-    false
 }
 
 /// Recursively copy `src` into `dst`, skipping heavy directories.
@@ -614,56 +497,34 @@ mod tests {
     }
 
     #[test]
-    fn detects_typescript_from_tsconfig() {
-        let dir = temp_dir("ts-detect");
+    fn other_for_empty_directory() {
+        let dir = temp_dir("other-empty");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
-        assert!(Language::detect_all(&dir).contains(&Language::TypeScript));
+        assert_eq!(Language::detect_all(&dir), vec![Language::Other]);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn detects_python_from_pyproject() {
-        let dir = temp_dir("py-detect");
+    fn other_for_non_rust_workspace() {
+        let dir = temp_dir("other-py");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("pyproject.toml"), "[project]\n").unwrap();
-        assert!(Language::detect_all(&dir).contains(&Language::Python));
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn polyglot_workspace_detects_all_languages() {
-        let dir = temp_dir("polyglot");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
-        fs::write(dir.join("tsconfig.json"), "{}").unwrap();
-        let langs = Language::detect_all(&dir);
-        assert!(langs.contains(&Language::Rust));
-        assert!(langs.contains(&Language::TypeScript));
-        assert_eq!(langs.len(), 2);
-        fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[test]
-    fn unknown_for_empty_directory() {
-        let dir = temp_dir("unknown");
-        fs::create_dir_all(&dir).unwrap();
-        assert_eq!(Language::detect_all(&dir), vec![Language::Unknown]);
+        fs::write(dir.join("package.json"), "{}").unwrap();
+        // No Cargo.toml → Other, regardless of other manifests present.
+        assert_eq!(Language::detect_all(&dir), vec![Language::Other]);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
-    async fn gate_skips_unknown_language() {
-        let dir = temp_dir("skip-unknown");
+    async fn gate_returns_spawn_failed_for_non_rust() {
+        let dir = temp_dir("non-rust-spawn-fail");
         fs::create_dir_all(&dir).unwrap();
         let gate = PreApplyGate::default();
         let result = gate.check(&dir).await;
-        assert!(matches!(
-            result,
-            GateResult::Skipped {
-                language: Language::Unknown
-            }
-        ));
+        assert!(
+            result.is_spawn_failed(),
+            "non-Rust workspace must return SpawnFailed per ADR-005, got: {result:?}"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -695,18 +556,11 @@ mod tests {
     }
 
     #[test]
-    fn blast_radius_python_is_advise() {
+    fn blast_radius_other_is_hard_reject() {
+        // Per ADR-005, every language maps to HardReject.
         assert_eq!(
-            BlastRadius::for_language(Language::Python),
-            BlastRadius::Advise
-        );
-    }
-
-    #[test]
-    fn blast_radius_unknown_is_pass_through() {
-        assert_eq!(
-            BlastRadius::for_language(Language::Unknown),
-            BlastRadius::PassThrough
+            BlastRadius::for_language(Language::Other),
+            BlastRadius::HardReject
         );
     }
 
@@ -857,6 +711,31 @@ mod tests {
             gate.timeout_secs(),
             0,
             "gate must round-trip the configured timeout"
+        );
+    }
+
+    /// ADR-005 regression: a non-Rust workspace must fail-closed at the
+    /// sandbox layer, not silently pass-through.
+    #[tokio::test]
+    async fn non_rust_workspace_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No Cargo.toml — workspace is "Other"
+        std::fs::write(tmp.path().join("README.md"), "not rust").unwrap();
+        let gate = SandboxGate::new(tmp.path().to_path_buf());
+        let edit = SandboxedEdit {
+            relative_path: "foo.txt".into(),
+            new_content: "anything".into(),
+        };
+        let result = gate.verify(&edit).await;
+        assert!(
+            !result.accepted,
+            "non-Rust workspace must fail-closed per ADR-005; reason={}",
+            result.reason
+        );
+        assert!(
+            result.reason.contains("Rust-only") || result.reason.contains("non-Rust"),
+            "reason should reference ADR-005 Rust-only policy; got: {}",
+            result.reason
         );
     }
 
