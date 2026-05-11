@@ -262,17 +262,19 @@ pub async fn run_apply_loop(
             }
         }
 
-        // Early-exit: all files accepted, no rejections → done.
+        // Loop continues. The model signals completion by emitting a text-only
+        // response (no propose_edit calls) — handled at the top of the next
+        // iteration via `tool_uses.is_empty()`. Eagerly exiting on first batch
+        // success would short-circuit multi-file projects where the model
+        // intends to call propose_edit again in a subsequent round.
         if any_accepted_this_round && !had_rejections_this_round {
             let _ = tx
                 .send(ResponseChunk::Status {
                     message: format!(
-                        "[APPLY] round {round} complete — {files_written} file(s) written"
+                        "[APPLY] round {round}: {files_written} file(s) accepted; continuing"
                     ),
                 })
                 .await;
-            finish_success(request_id, model_used, total_in, total_out, tx).await;
-            return Ok(());
         }
 
         let _ = last_error; // consumed below if exhausted
