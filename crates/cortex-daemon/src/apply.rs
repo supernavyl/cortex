@@ -8,13 +8,14 @@
 //!
 //! Per ADR-004: WRITER + retry only. No critic stage.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tokio::sync::mpsc;
 
 use cortex_core::gate::{SandboxGate, SandboxedEdit};
 use cortex_core::protocol::ResponseChunk;
+use cortex_core::workspace_guard::WorkspaceGuard;
 use cortex_tools::session::Message;
 
 use crate::ollama::{OllamaClient, OllamaModelClient};
@@ -55,21 +56,6 @@ fn propose_edit_tool() -> serde_json::Value {
     })
 }
 
-// ── Path validation ───────────────────────────────────────────────────────────
-
-fn validate_relative_path(s: &str) -> Option<&str> {
-    let p = Path::new(s);
-    if !p.is_relative() {
-        return None;
-    }
-    for component in p.components() {
-        if component == Component::ParentDir {
-            return None;
-        }
-    }
-    Some(s)
-}
-
 // ── System prompt ─────────────────────────────────────────────────────────────
 
 fn build_system_prompt(workspace_root: &Path) -> String {
@@ -79,15 +65,14 @@ fn build_system_prompt(workspace_root: &Path) -> String {
          RULES:\n\
          1. Call propose_edit once per file. For multi-file tasks, call it multiple\n\
             times in ONE response — all files in a single batch.\n\
-         2. After your batch is accepted you may receive a reviewer critique.\n\
-            If so, call propose_edit ONCE more with the corrected file. Then STOP.\n\
-         3. If your files are accepted with no critique, output ONLY the text 'Done.'\n\
-            with zero tool calls.\n\
-         4. Never re-write a file unless a critique explicitly asks for it.\n\
-         - workspace_relative_path: relative path, no '..' (e.g. 'src/models/user.py')\n\
+         2. If your files are accepted, output ONLY the text 'Done.' with zero tool calls.\n\
+         3. Never re-write a file unless the gate rejects it.\n\
+         - workspace_relative_path: relative path, no '..' (e.g. 'src/lib.rs')\n\
          - new_content: complete file content\n\
-         - rationale: one sentence\n\
-         Always produce valid, runnable Python. No placeholders or TODOs.",
+         - rationale: one sentence\n\n\
+         Always produce valid, compiling Rust matching the workspace edition (default 2024).\n\
+         No `unwrap()` or `expect()` in library code; use `?` propagation.\n\
+         No `unsafe` without a `// SAFETY:` comment explaining the invariant.",
         root = workspace_root.display()
     )
 }
@@ -112,6 +97,12 @@ pub async fn run_apply_loop(
 
     let tools = vec![propose_edit_tool()];
     let system_prompt = build_system_prompt(workspace_root);
+    let guard = WorkspaceGuard::new(workspace_root).map_err(|e| {
+        anyhow::anyhow!(
+            "workspace guard init failed for {}: {e}",
+            workspace_root.display()
+        )
+    })?;
     let client = OllamaModelClient::with_max_context(ollama, model.clone()).await;
 
     let mut messages: Vec<Message> = vec![Message::user(prompt.to_string())];
@@ -188,17 +179,16 @@ pub async fn run_apply_loop(
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            let safe_path = match validate_relative_path(raw_path) {
-                Some(p) => p.to_owned(),
-                None => {
-                    let err = format!(
-                        "invalid path '{raw_path}': must be relative with no '..' components"
-                    );
+            let workspace_path = match guard.resolve(raw_path) {
+                Ok(wp) => wp,
+                Err(e) => {
+                    let err = format!("invalid path '{raw_path}': {e}");
                     messages.push(Message::tool_result(tool_id, &err, true));
                     last_error = Some(err);
                     continue;
                 }
             };
+            let safe_path = raw_path.to_owned();
 
             let edit = SandboxedEdit {
                 relative_path: PathBuf::from(&safe_path),
@@ -207,11 +197,37 @@ pub async fn run_apply_loop(
             let vr = gate.verify(&edit).await;
 
             if vr.accepted {
-                let abs_path = workspace_root.join(&safe_path);
+                let abs_path = workspace_path.as_path().to_path_buf();
                 if let Some(parent) = abs_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(&abs_path, new_content)?;
+                // Atomic write: temp + fsync + rename. Crash mid-write leaves the original file intact.
+                let tmp_name = format!(
+                    ".{}.cortex-tmp-{}-{}",
+                    abs_path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file"),
+                    std::process::id(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0)
+                );
+                let tmp_path = abs_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .join(tmp_name);
+                {
+                    use std::io::Write as _;
+                    let mut f = std::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&tmp_path)?;
+                    f.write_all(new_content.as_bytes())?;
+                    f.sync_data()?;
+                }
+                std::fs::rename(&tmp_path, &abs_path)?;
                 files_written += 1;
                 any_accepted_this_round = true;
 
@@ -334,26 +350,8 @@ async fn finish_done(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn validate_path_rejects_absolute() {
-        assert!(validate_relative_path("/etc/passwd").is_none());
-    }
-
-    #[test]
-    fn validate_path_rejects_dotdot() {
-        assert!(validate_relative_path("../secrets.rs").is_none());
-        assert!(validate_relative_path("src/../../etc/passwd").is_none());
-    }
-
-    #[test]
-    fn validate_path_accepts_normal_relative() {
-        assert_eq!(validate_relative_path("src/lib.rs"), Some("src/lib.rs"));
-        assert_eq!(
-            validate_relative_path("src/models/user.py"),
-            Some("src/models/user.py")
-        );
-        assert_eq!(validate_relative_path("Cargo.toml"), Some("Cargo.toml"));
-    }
+    // Path validation tests live in `cortex_core::workspace_guard`.
+    // This module previously tested the now-deleted `validate_relative_path`
+    // helper; WorkspaceGuard's own test suite covers absolute, parent-dir,
+    // NUL-byte, symlink-ancestor, and outside-root cases.
 }
