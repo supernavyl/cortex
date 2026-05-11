@@ -280,19 +280,24 @@ impl OllamaClient {
                 .await
                 .context("failed to send chat request to ollama")?;
 
-            if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-                last_err =
-                    format!("ollama chat returned 429 Too Many Requests (attempt {attempt})");
+            // Retry on 429 (rate limit) and 503 (server overloaded) — both are
+            // transient cloud-proxy responses that resolve on back-off.
+            let status = resp.status();
+            let retryable = status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status == reqwest::StatusCode::SERVICE_UNAVAILABLE;
+            if retryable {
+                let body = resp.text().await.unwrap_or_default();
+                last_err = format!("ollama chat returned {status} (attempt {attempt}): {body}");
                 if attempt < MAX_RETRIES {
+                    tracing::warn!(attempt, delay_secs, %status, "retryable error — backing off");
                     tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
-                    delay_secs *= 2;
+                    delay_secs = (delay_secs * 2).min(60);
                     continue;
                 }
                 anyhow::bail!("{last_err}");
             }
 
-            if !resp.status().is_success() {
-                let status = resp.status();
+            if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
                 anyhow::bail!("ollama chat returned {status}: {body}");
             }
