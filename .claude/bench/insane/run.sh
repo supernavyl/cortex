@@ -122,7 +122,7 @@ run_cortex() {
   local prompt
   prompt=$(cat "$prompt_file")
   ensure_cortex_daemon || return 99
-  ( cd "$ws" && timeout "$TIMEOUT_SECS" \
+  ( cd "$ws" && timeout --kill-after=30s "$TIMEOUT_SECS" \
       "$REPO_ROOT/target/debug/cortex-cli" apply "$prompt" --model "$CORTEX_MODEL" \
       > "$log" 2>&1 )
   return $?
@@ -132,7 +132,7 @@ run_claude() {
   local ws="$1"
   local prompt_file="$2"
   local log="$ws/_run.log"
-  ( cd "$ws" && timeout "$TIMEOUT_SECS" bash -c \
+  ( cd "$ws" && timeout --kill-after=30s "$TIMEOUT_SECS" bash -c \
       "cat '$prompt_file' | claude --print --dangerously-skip-permissions --add-dir '$ws'" \
       > "$log" 2>&1 )
   return $?
