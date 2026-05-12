@@ -24,6 +24,12 @@ use crate::ollama::{OllamaClient, OllamaModelClient};
 /// 3 batches × ~8 files per batch comfortably covers a 25-file project.
 const MAX_ROUNDS: u32 = 12;
 
+/// Max times we corrective-re-prompt a model that returned text instead of a tool call
+/// on the first round (before any files were written). Cloud models like kimi-k2.6
+/// occasionally narrate intent in prose; a single hard nudge usually flips them into
+/// tool-calling mode without burning the full retry budget on the same conversation.
+const MAX_NO_TOOL_NUDGES: u32 = 2;
+
 // ── Tool schemas ──────────────────────────────────────────────────────────────
 
 fn propose_edit_tool() -> serde_json::Value {
@@ -161,6 +167,7 @@ pub async fn run_apply_loop(
     let mut total_out = 0u32;
     let mut files_written: u32 = 0;
     let mut last_error: Option<String> = None;
+    let mut no_tool_nudges: u32 = 0;
 
     for round in 1..=MAX_ROUNDS {
         let _ = tx
@@ -216,7 +223,7 @@ pub async fn run_apply_loop(
 
         tracing::debug!(round, count = tool_uses.len(), "apply: tool_uses collected");
         if tool_uses.is_empty() {
-            // Model returned text — it's declaring itself done.
+            // Model returned text — either it's done, or it narrated instead of calling a tool.
             if files_written > 0 {
                 let _ = tx
                     .send(ResponseChunk::Status {
@@ -228,10 +235,44 @@ pub async fn run_apply_loop(
                 finish_success(request_id, model_used, total_in, total_out, tx).await;
                 return Ok(());
             }
-            // Model gave text on first round — no files ever written.
+            // Model gave prose with zero files written. Nudge it back to tool-calling
+            // before declaring NOPROD — cloud models occasionally start with a plan.
+            // Honor an explicit IMPOSSIBLE signal so we don't burn rounds on a real refusal.
+            let assistant_text = response_msg.text();
+            if assistant_text.to_ascii_uppercase().contains("IMPOSSIBLE") {
+                let _ = tx
+                    .send(ResponseChunk::Error {
+                        message: "model signaled IMPOSSIBLE — task refused".to_string(),
+                    })
+                    .await;
+                finish_done(request_id, &model, total_in, total_out, tx).await;
+                return Ok(());
+            }
+            if no_tool_nudges < MAX_NO_TOOL_NUDGES {
+                no_tool_nudges += 1;
+                let _ = tx
+                    .send(ResponseChunk::Status {
+                        message: format!(
+                            "[APPLY] no tool call — nudging ({no_tool_nudges}/{MAX_NO_TOOL_NUDGES})"
+                        ),
+                    })
+                    .await;
+                messages.push(Message::user(
+                    "You output prose instead of calling a tool. The prose is discarded — \
+                     nothing was written. Call the `propose_batch` tool NOW with EVERY file \
+                     in the `files` array. Do not narrate. Do not plan. Do not apologize. \
+                     If the task is genuinely impossible, output ONLY the single word \
+                     IMPOSSIBLE with no tool call."
+                        .to_string(),
+                ));
+                continue;
+            }
+            // Exhausted nudges — give up.
             let _ = tx
                 .send(ResponseChunk::Error {
-                    message: "model did not call propose_edit — cannot apply".to_string(),
+                    message: format!(
+                        "model did not call propose_edit after {MAX_NO_TOOL_NUDGES} nudges — cannot apply"
+                    ),
                 })
                 .await;
             finish_done(request_id, &model, total_in, total_out, tx).await;
