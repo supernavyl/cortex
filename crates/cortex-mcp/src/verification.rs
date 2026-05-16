@@ -20,7 +20,7 @@ use rmcp::{ErrorData, RoleServer, ServerHandler};
 use serde_json::Value;
 
 use cortex_core::gate::{SandboxGate, SandboxedEdit};
-use cortex_core::workspace_guard::WorkspaceGuard;
+use cortex_core::workspace_guard::{WorkspaceGuard, WorkspacePath};
 
 // ── Tool schemas ──────────────────────────────────────────────────────────────
 
@@ -162,7 +162,7 @@ impl ServerHandler for VerificationServer {
 
 impl VerificationServer {
     async fn handle_verify(&self, input: &Value) -> Result<CallToolResult, ErrorData> {
-        let edit = match extract_edit(input, &self.workspace) {
+        let (edit, _workspace_path) = match extract_edit(input, &self.workspace) {
             Ok(e) => e,
             Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
         };
@@ -183,75 +183,18 @@ impl VerificationServer {
     }
 
     async fn handle_apply_if_clean(&self, input: &Value) -> Result<CallToolResult, ErrorData> {
-        let edit = match extract_edit(input, &self.workspace) {
+        // extract_edit now enforces the workspace boundary up-front and
+        // returns the guard-resolved WorkspacePath, removing the duplicate
+        // resolution that used to live here. ADR-006 P0.
+        let (edit, workspace_path) = match extract_edit(input, &self.workspace) {
             Ok(e) => e,
             Err(msg) => return Ok(CallToolResult::error(vec![Content::text(msg)])),
         };
-
-        let file_path = match input.get("file_path").and_then(Value::as_str) {
-            Some(p) => p.to_string(),
-            None => {
-                return Ok(CallToolResult::error(vec![Content::text(
-                    "missing file_path",
-                )]));
-            }
-        };
-
-        // Workspace boundary check (defense-in-depth: extract_edit may have
-        // produced an unverified relative_path if file_path was already outside).
-        let guard = match WorkspaceGuard::new(&self.workspace) {
-            Ok(g) => g,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "workspace guard init failed for {}: {e}",
-                    self.workspace.display()
-                ))]));
-            }
-        };
-
-        // Derive a relative path string to feed the guard. If the caller passed
-        // an absolute path inside the workspace, strip the prefix. Otherwise
-        // treat the supplied string as already-relative.
-        let supplied = std::path::Path::new(&file_path);
-        let relative_str: String = if supplied.is_absolute() {
-            // Try stripping the canonical workspace prefix first; fall back to
-            // the raw workspace prefix if canonicalization fails (the guard
-            // will still reject any escape).
-            let canon_root = self
-                .workspace
-                .canonicalize()
-                .unwrap_or_else(|_| self.workspace.clone());
-            let canon_supplied = supplied.canonicalize();
-            let stripped_canon = canon_supplied
-                .as_ref()
-                .ok()
-                .and_then(|c| c.strip_prefix(&canon_root).ok())
-                .map(std::path::Path::to_path_buf);
-            let stripped_raw = supplied
-                .strip_prefix(&self.workspace)
-                .ok()
-                .map(std::path::Path::to_path_buf);
-            match stripped_canon.or(stripped_raw) {
-                Some(rel) => rel.to_string_lossy().into_owned(),
-                None => {
-                    return Ok(CallToolResult::error(vec![Content::text(format!(
-                        "file_path '{file_path}' is outside workspace {}",
-                        self.workspace.display()
-                    ))]));
-                }
-            }
-        } else {
-            file_path.clone()
-        };
-
-        let workspace_path = match guard.resolve(&relative_str) {
-            Ok(wp) => wp,
-            Err(e) => {
-                return Ok(CallToolResult::error(vec![Content::text(format!(
-                    "invalid path '{file_path}': {e}"
-                ))]));
-            }
-        };
+        let file_path = input
+            .get("file_path")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
 
         let vr = self.gate.verify(&edit).await;
 
@@ -321,18 +264,74 @@ impl VerificationServer {
 
 // ── Edit extraction ───────────────────────────────────────────────────────────
 
-fn extract_edit(input: &Value, workspace: &std::path::Path) -> Result<SandboxedEdit, String> {
+/// Resolve a caller-supplied `file_path` against the workspace, rejecting any
+/// path that escapes the workspace root (absolute paths outside the workspace
+/// and relative `..` traversals).
+///
+/// Returns the guard-validated [`WorkspacePath`] and a workspace-relative
+/// `PathBuf` suitable for `SandboxedEdit::relative_path`.
+///
+/// Used by both `verify_edit` and `apply_if_clean` so the workspace boundary
+/// is enforced on every read of caller-supplied file paths — see ADR-006.
+fn resolve_in_workspace(
+    workspace: &std::path::Path,
+    file_path_str: &str,
+) -> Result<(WorkspacePath, std::path::PathBuf), String> {
+    let guard = WorkspaceGuard::new(workspace).map_err(|e| {
+        format!(
+            "workspace guard init failed for {}: {e}",
+            workspace.display()
+        )
+    })?;
+
+    let supplied = std::path::Path::new(file_path_str);
+    let relative_str: String = if supplied.is_absolute() {
+        let canon_root = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        let canon_supplied = supplied.canonicalize();
+        let stripped_canon = canon_supplied
+            .as_ref()
+            .ok()
+            .and_then(|c| c.strip_prefix(&canon_root).ok())
+            .map(std::path::Path::to_path_buf);
+        let stripped_raw = supplied
+            .strip_prefix(workspace)
+            .ok()
+            .map(std::path::Path::to_path_buf);
+        match stripped_canon.or(stripped_raw) {
+            Some(rel) => rel.to_string_lossy().into_owned(),
+            None => {
+                return Err(format!(
+                    "file_path '{file_path_str}' is outside workspace {}",
+                    workspace.display()
+                ));
+            }
+        }
+    } else {
+        file_path_str.to_string()
+    };
+
+    let workspace_path = guard
+        .resolve(&relative_str)
+        .map_err(|e| format!("invalid path '{file_path_str}': {e}"))?;
+
+    Ok((workspace_path, std::path::PathBuf::from(relative_str)))
+}
+
+fn extract_edit(
+    input: &Value,
+    workspace: &std::path::Path,
+) -> Result<(SandboxedEdit, WorkspacePath), String> {
     let file_path_str = input
         .get("file_path")
         .and_then(Value::as_str)
         .ok_or("missing required field: file_path")?;
 
-    let abs_path = std::path::Path::new(file_path_str);
-
-    let relative_path = abs_path
-        .strip_prefix(workspace)
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|_| abs_path.to_path_buf());
+    // Enforce workspace boundary BEFORE any filesystem read. Closes the
+    // path-traversal info-disclosure surface where verify_edit could read
+    // arbitrary files via the old_string/new_string patch path. ADR-006 P0.
+    let (workspace_path, relative_path) = resolve_in_workspace(workspace, file_path_str)?;
 
     let new_content = if let Some(content) = input.get("content").and_then(Value::as_str) {
         // write_file style: full replacement
@@ -341,12 +340,12 @@ fn extract_edit(input: &Value, workspace: &std::path::Path) -> Result<SandboxedE
         input.get("old_string").and_then(Value::as_str),
         input.get("new_string").and_then(Value::as_str),
     ) {
-        // edit_file style: apply patch to current file content
+        // edit_file style: apply patch to the guard-resolved file content
         let replace_all = input
             .get("replace_all")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        let current = std::fs::read_to_string(abs_path)
+        let current = std::fs::read_to_string(workspace_path.as_path())
             .map_err(|e| format!("cannot read {file_path_str}: {e}"))?;
         if replace_all {
             current.replace(old, new)
@@ -360,10 +359,13 @@ fn extract_edit(input: &Value, workspace: &std::path::Path) -> Result<SandboxedE
         );
     };
 
-    Ok(SandboxedEdit {
-        relative_path,
-        new_content,
-    })
+    Ok((
+        SandboxedEdit {
+            relative_path,
+            new_content,
+        },
+        workspace_path,
+    ))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -550,6 +552,72 @@ mod tests {
         let guard = cortex_core::workspace_guard::WorkspaceGuard::new(&ws).expect("guard init");
         assert!(guard.resolve("/etc/passwd").is_err());
         assert!(guard.resolve("../foo").is_err());
+
+        fs::remove_dir_all(ws).unwrap();
+    }
+
+    // ── ADR-006 P0: verify_edit must enforce workspace boundary ───────────────
+
+    #[tokio::test]
+    async fn verify_edit_rejects_path_outside_workspace() {
+        let ws = tmp_workspace("verify-outside");
+        let server = VerificationServer::new(ws.clone());
+
+        // Absolute path outside the workspace must be rejected by extract_edit
+        // before the gate ever sees the request.
+        let input = serde_json::json!({
+            "file_path": "/etc/passwd",
+            "content": "anything"
+        });
+
+        let result = server.handle_verify(&input).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "verify_edit must reject paths outside the workspace"
+        );
+
+        fs::remove_dir_all(ws).unwrap();
+    }
+
+    #[tokio::test]
+    async fn verify_edit_rejects_parent_dir_traversal() {
+        let ws = tmp_workspace("verify-traverse");
+        let server = VerificationServer::new(ws.clone());
+
+        let input = serde_json::json!({
+            "file_path": "../escaped.rs",
+            "content": "fn x() {}\n"
+        });
+
+        let result = server.handle_verify(&input).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "verify_edit must reject ../ traversal"
+        );
+
+        fs::remove_dir_all(ws).unwrap();
+    }
+
+    #[tokio::test]
+    async fn verify_edit_does_not_read_outside_workspace_via_patch() {
+        // PHANTOM scenario from ADR-006: a verify_edit call with old_string/new_string
+        // and a file_path pointing outside the workspace previously caused extract_edit
+        // to invoke std::fs::read_to_string on the out-of-workspace path. After the
+        // boundary fix, the workspace guard must reject before any read happens.
+        let ws = tmp_workspace("verify-patch-read");
+        let server = VerificationServer::new(ws.clone());
+
+        let input = serde_json::json!({
+            "file_path": "/etc/passwd",
+            "old_string": "root",
+            "new_string": "compromised"
+        });
+
+        let result = server.handle_verify(&input).await.unwrap();
+        assert!(
+            result.is_error.unwrap_or(false),
+            "verify_edit must not attempt to read files outside the workspace"
+        );
 
         fs::remove_dir_all(ws).unwrap();
     }

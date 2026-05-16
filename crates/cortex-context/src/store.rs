@@ -423,16 +423,26 @@ pub struct ChunkResult {
 fn row_to_symbol(row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
     let kind_str: String = row.get(2)?;
     let lang_str: String = row.get(3)?;
+    // ADR-006 P0: fail explicitly on unknown language strings instead of
+    // silently miscategorizing every unknown row as Rust. A previous fallback
+    // (`_ => Language::Rust`) corrupted symbol data on write→read roundtrips.
+    let language = match lang_str.as_str() {
+        "rust" => Language::Rust,
+        "python" => Language::Python,
+        "typescript" => Language::TypeScript,
+        other => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                3,
+                rusqlite::types::Type::Text,
+                format!("unknown language in symbol row: {other:?}").into(),
+            ));
+        }
+    };
     Ok(Symbol {
         file_path: row.get(0)?,
         name: row.get(1)?,
         kind: SymbolKind::from_str(&kind_str).unwrap_or(SymbolKind::Function),
-        language: match lang_str.as_str() {
-            "rust" => Language::Rust,
-            "python" => Language::Python,
-            "typescript" => Language::TypeScript,
-            _ => Language::Rust,
-        },
+        language,
         start_line: row.get(4)?,
         end_line: row.get(5)?,
         start_col: row.get(6)?,

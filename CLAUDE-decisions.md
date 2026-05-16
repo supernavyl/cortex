@@ -26,3 +26,23 @@
 **Agents**: SENTINEL, SURVEYOR, MEDIC, BENCH, DEPS, VERDICT (scan-DEEP); CEO ruled.
 
 ---
+
+## 2026-05-16 — Federation Deferred; Pre-Federation Hygiene Required (ADR-006)
+
+**Problem**: User requested federation of language-specific verification daemons (cortex-py-daemon, cortex-ts-daemon, ...) federated via MCP. Four-agent /architect debate evaluated 7 options (A-G).
+**Decision**: Option G — defer all federation work; honor ADR-005 escalation criteria as the sole gate. Fix 3 P0 defects this week: (1) WRITER prompt drift at server.rs:484-505 (CORTEX coaches Python/TS/Go output the gate then rejects — present on 28,748 user .py files); (2) verify_edit::extract_edit path-traversal (STRIDE-I info disclosure, `/etc/passwd` works); (3) Byzantine `_ => Language::Rust` fallback in store.rs::row_to_symbol. Total 95-130 LOC, 1 day.
+**Key findings**:
+- PHANTOM exposed 3 grep-verifiable present-tense defects in the Rust path.
+- FORGE Phase 1 invented pyright `--co` flag (does not exist — that's pytest), undercounted BlastRadius::Advise re-introduction by 5-6× (21 grep hits → 150-190 LOC, not 30), and recommended a change ADR-005's rejected-alternatives section explicitly closed. FORGE retracted, conf -17pp.
+- ORACLE mischaracterized dprint (WASM in-process plugins, not subprocess invocation) and cited a Brooks recommendation Brooks himself retracted in 1995.
+- All three Phase-1 agents designed past ADR-005's escalation criteria (0/3 hold today). Scope violation corrected by Phase 2.
+- Python verifier at ~60% catch rate = verification-theater, not verification. Shipping cortex-py-daemon = strictly worse than Claude Code direct on Python.
+**Confidence**: 87%
+**Key trade-off**: User's Python/TS workflows (NOESIS 26.5k, LIS 1.9k, SIP 262 .py files) keep routing through Claude Code rather than CORTEX. CORTEX identity (verification-first Rust daemon) preserved over breadth.
+**Rejected**: A (Federation — premature), B (Monolith — reverses ADR-005), C (Plugin .so — RCE class), D (Multi-repo — drift), E (Don't build — runner-up at 88.2%), F (dprint — mischaracterized analog).
+**Escalation criteria**: Re-litigate on any of: ≥10 distinct users + Python verifier ≥75% catch rate empirically + Rust path through Phase 6 + 30 days stable + organic 2nd adopter + WASM-component-model maturity.
+**Six-month review**: 2026-11-16.
+**ADR**: docs/adr/ADR-006-federation-deferred-pending-escalation.md
+**Agents**: NEXUS (Opus), FORGE (Sonnet), ORACLE (Opus), PHANTOM (Sonnet), VERDICT (Opus).
+
+---

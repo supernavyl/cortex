@@ -479,30 +479,25 @@ pub(super) fn build_system_prompt(
             ws.root.display(),
         ));
 
-        // Add language-specific hints
+        // CORTEX's pre-apply gate is Rust-only (ADR-005, ADR-006). Only emit
+        // language-specific build hints for Rust; for any other detected language,
+        // emit a notice so the WRITER knows the verification gate will reject
+        // non-Rust edits as SpawnFailed and route those workflows externally.
         match ws.language {
             workspace::ProjectLanguage::Rust => {
                 prompt.push_str("Build: `cargo build`, Test: `cargo test`, Lint: `cargo clippy`\n");
             }
-            workspace::ProjectLanguage::TypeScript => {
+            workspace::ProjectLanguage::TypeScript
+            | workspace::ProjectLanguage::Python
+            | workspace::ProjectLanguage::Godot
+            | workspace::ProjectLanguage::Go
+            | workspace::ProjectLanguage::Unknown => {
                 prompt.push_str(
-                    "Build: `npx tsc --noEmit`, Test: `npx vitest run`, Lint: `npx eslint .`\n",
+                    "Note: CORTEX's pre-apply gate is Rust-only (ADR-005, ADR-006). \
+                     Non-Rust edits cannot be sandbox-verified — do not propose edits \
+                     for this workspace; defer to external tooling (Claude Code, Aider).\n",
                 );
             }
-            workspace::ProjectLanguage::Python => {
-                prompt.push_str(
-                    "Test: `python -m pytest`, Lint: `ruff check .`, Format: `ruff format .`\n",
-                );
-            }
-            workspace::ProjectLanguage::Godot => {
-                prompt.push_str("This is a Godot 4 project. Edit .gd files and .tscn scenes.\n");
-            }
-            workspace::ProjectLanguage::Go => {
-                prompt.push_str(
-                    "Build: `go build ./...`, Test: `go test ./...`, Lint: `golangci-lint run`\n",
-                );
-            }
-            workspace::ProjectLanguage::Unknown => {}
         }
     }
 
