@@ -325,7 +325,10 @@ impl OllamaClient {
                                         content.push_str(c);
                                     }
                                     if chunk.message.tool_calls.is_some() {
-                                        tracing::info!(len = line_buf.len(), "chat: tool_calls received");
+                                        tracing::info!(
+                                            len = line_buf.len(),
+                                            "chat: tool_calls received"
+                                        );
                                         tool_calls = chunk.message.tool_calls.clone();
                                     }
                                     if chunk.done {
@@ -369,7 +372,10 @@ impl OllamaClient {
                 }
             }
 
-            tracing::info!(has_tool_calls = tool_calls.is_some(), "chat: response assembled");
+            tracing::info!(
+                has_tool_calls = tool_calls.is_some(),
+                "chat: response assembled"
+            );
             return Ok((
                 ChatMessage {
                     role: "assistant".to_string(),
