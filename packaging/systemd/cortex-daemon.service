@@ -1,6 +1,6 @@
 [Unit]
 Description=CORTEX daemon — Rust pre-apply verification gate
-Documentation=https://github.com/supernovyl/cortex
+Documentation=https://github.com/supernavyl/cortex
 After=network.target
 
 [Service]

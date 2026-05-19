@@ -25,7 +25,7 @@ Three paths, easiest first.
 # Pick your arch — x86_64 or aarch64.
 VERSION=0.2.0
 TARGET=x86_64-unknown-linux-musl   # or aarch64-unknown-linux-musl
-curl -fsSL "https://github.com/supernovyl/cortex/releases/download/v${VERSION}/cortex-${VERSION}-${TARGET}.tar.gz" \
+curl -fsSL "https://github.com/supernavyl/cortex/releases/download/v${VERSION}/cortex-${VERSION}-${TARGET}.tar.gz" \
   | tar -xz -C /tmp
 sudo install -Dm755 "/tmp/cortex-${VERSION}-${TARGET}/cortex"        /usr/local/bin/cortex
 sudo install -Dm755 "/tmp/cortex-${VERSION}-${TARGET}/cortex-daemon" /usr/local/bin/cortex-daemon
@@ -48,7 +48,7 @@ cd packaging/aur && makepkg -si
 
 ```bash
 # Rust 1.93+ pinned in rust-toolchain.toml.
-git clone https://github.com/supernovyl/cortex && cd cortex
+git clone https://github.com/supernavyl/cortex && cd cortex
 cargo install --path crates/cortex-cli
 cargo install --path crates/cortex-daemon
 ```

@@ -7,8 +7,8 @@ version = "0.2.0"
 edition = "2024"
 license = "MIT"
 rust-version = "1.93"
-repository = "https://github.com/supernovyl/cortex"
-homepage = "https://github.com/supernovyl/cortex"
+repository = "https://github.com/supernavyl/cortex"
+homepage = "https://github.com/supernavyl/cortex"
 description = "CORTEX — Rust pre-apply verification gate for coding AI"
 authors = ["supernovyl"]
 

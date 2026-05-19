@@ -1,11 +1,11 @@
-# Maintainer: supernovyl
+# Maintainer: supernavyl
 pkgname=cortex-bin
 _pkgname=cortex
 pkgver=0.2.0
 pkgrel=1
 pkgdesc="CORTEX — Rust pre-apply verification gate for coding AI"
 arch=('x86_64' 'aarch64')
-url="https://github.com/supernovyl/cortex"
+url="https://github.com/supernavyl/cortex"
 license=('MIT')
 depends=('rust' 'glibc')
 optdepends=('ollama: local model backend')
