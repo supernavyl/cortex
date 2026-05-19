@@ -51,6 +51,21 @@ async fn run_one(
         };
     }
 
+    if let Err(e) = bootstrap_rust_workspace(&workspace, task.name).await {
+        return BenchResult {
+            model,
+            task: task.name.to_string(),
+            success: false,
+            rounds: 0,
+            latency_ms: 0,
+            tokens_in: 0,
+            tokens_out: 0,
+            lines_written: 0,
+            tok_per_sec: 0.0,
+            error: Some(format!("failed to bootstrap rust workspace: {e}")),
+        };
+    }
+
     let gate = SandboxGate::new(workspace.clone());
     let (tx, mut rx) = mpsc::channel::<ResponseChunk>(128);
 
@@ -188,8 +203,9 @@ async fn run_one(
     }
 }
 
-/// Recursively sum line counts for all `.py` files under `dir`.
-fn count_py_lines_recursive(dir: &std::path::Path) -> u32 {
+/// Recursively sum line counts for all `.rs` files under `dir`, excluding
+/// the bootstrap `src/lib.rs` shim that the runner writes itself.
+fn count_rs_lines_recursive(dir: &std::path::Path) -> u32 {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
     };
@@ -197,8 +213,13 @@ fn count_py_lines_recursive(dir: &std::path::Path) -> u32 {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            total += count_py_lines_recursive(&path);
-        } else if path.extension().is_some_and(|e| e == "py")
+            // Skip `target/` — cargo build artifacts can contain generated .rs.
+            if path.file_name().is_some_and(|n| n == "target") {
+                continue;
+            }
+            total += count_rs_lines_recursive(&path);
+        } else if path.extension().is_some_and(|e| e == "rs")
+            && path.file_name().is_some_and(|n| n != "lib.rs")
             && let Ok(content) = std::fs::read_to_string(&path)
         {
             total += content.lines().count() as u32;
@@ -207,12 +228,40 @@ fn count_py_lines_recursive(dir: &std::path::Path) -> u32 {
     total
 }
 
-/// Scan `workspace` recursively and return total line count across all `.py` files.
+/// Scan `workspace` recursively and return total line count across all `.rs`
+/// files. Excludes the bootstrap shim and `target/` build artifacts.
 async fn count_written_lines(workspace: &Path, _task_name: &str) -> u32 {
     let ws = workspace.to_path_buf();
-    tokio::task::spawn_blocking(move || count_py_lines_recursive(&ws))
+    tokio::task::spawn_blocking(move || count_rs_lines_recursive(&ws))
         .await
         .unwrap_or(0)
+}
+
+/// Bootstrap the workspace as a minimal stdlib-only Rust library crate so
+/// `cargo check` can verify the task's output. Writes:
+/// - `Cargo.toml`  — single library crate, edition 2024, no deps
+/// - `src/lib.rs`  — `pub mod <task_name>;` shim so the task's file is
+///   included in the crate graph.
+///
+/// Idempotent: overwrites existing files. Safe to call before each apply.
+async fn bootstrap_rust_workspace(workspace: &Path, task_name: &str) -> std::io::Result<()> {
+    let cargo_toml = "[package]\n\
+         name = \"cortex_bench_task\"\n\
+         version = \"0.0.1\"\n\
+         edition = \"2024\"\n\
+         publish = false\n\
+         \n\
+         [lib]\n\
+         name = \"cortex_bench_task\"\n\
+         path = \"src/lib.rs\"\n";
+
+    let lib_rs = format!("pub mod {task_name};\n");
+
+    let src_dir = workspace.join("src");
+    tokio::fs::create_dir_all(&src_dir).await?;
+    tokio::fs::write(workspace.join("Cargo.toml"), cargo_toml).await?;
+    tokio::fs::write(src_dir.join("lib.rs"), lib_rs).await?;
+    Ok(())
 }
 
 // ── Batch runners ─────────────────────────────────────────────────────────────
