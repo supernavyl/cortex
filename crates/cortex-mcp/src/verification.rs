@@ -24,7 +24,9 @@ use cortex_core::workspace_guard::{WorkspaceGuard, WorkspacePath};
 
 // ── Tool schemas ──────────────────────────────────────────────────────────────
 
+#[allow(clippy::expect_used)]
 fn verify_edit_schema() -> Arc<serde_json::Map<String, Value>> {
+    // SAFETY: schema is a static JSON literal; parse failure would be a build-time bug.
     Arc::new(
         serde_json::from_value(serde_json::json!({
             "type": "object",
@@ -48,7 +50,7 @@ fn verify_edit_schema() -> Arc<serde_json::Map<String, Value>> {
             },
             "required": ["file_path"]
         }))
-        .unwrap(),
+        .expect("static JSON schema must parse"),
     )
 }
 

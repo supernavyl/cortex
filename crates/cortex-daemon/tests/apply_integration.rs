@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Infrastructure tests for the CORTEX apply system.
 //! These tests verify the mutex serialisation pattern and filesystem guard behaviour.
 //! Tests requiring qwen3.6:27b are gated on CORTEX_APPLY_INTEGRATION_TESTS=1.

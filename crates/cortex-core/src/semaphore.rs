@@ -4,6 +4,8 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
+use crate::lock_ext::LockExt;
+
 /// A fair asynchronous semaphore that maintains FIFO order for acquiring permits.
 pub struct Semaphore {
     state: Arc<Mutex<SemaphoreState>>,
@@ -43,7 +45,7 @@ pub struct SemaphoreGuard {
 
 impl Drop for SemaphoreGuard {
     fn drop(&mut self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_panic_on_poison();
         state.permits += 1;
 
         // Wake exactly one waiter if there are any
@@ -62,7 +64,7 @@ impl Future for AcquireFuture {
     type Output = SemaphoreGuard;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock_panic_on_poison();
 
         if state.permits > 0 {
             state.permits -= 1;

@@ -4,6 +4,7 @@ use anyhow::Result;
 use cortex_context::store::SymbolStore;
 use cortex_core::config::Config;
 use cortex_core::gate::PreApplyGate;
+use cortex_core::lock_ext::LockExt;
 use cortex_core::protocol::ResponseChunk;
 use cortex_core::router;
 use cortex_core::workspace;
@@ -192,7 +193,7 @@ pub(super) async fn handle_ask(
 
     // Load session history and inject into system prompt
     let system_prompt = if let Some(sid) = session_id {
-        let store = symbols.lock().unwrap();
+        let store = symbols.lock_panic_on_poison();
         let history = store.get_recent_messages(sid, 20).unwrap_or_default();
         if history.is_empty() {
             system_prompt

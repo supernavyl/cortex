@@ -1,0 +1,58 @@
+[package]
+name = "cortex-bench-prewarm"
+version = "0.0.1"
+edition = "2024"
+
+# Union of all dependencies declared across the 13 project specs in
+# .claude/bench/insane/projects/. Running `cargo fetch` here once warms
+# ~/.cargo/registry so cortex's offline gate can resolve them.
+
+[dependencies]
+# Web / async
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+async-trait = "0.1"
+
+# Serde + JSON / TOML
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Storage
+sled = "0.34"
+dashmap = "6"
+parking_lot = "0.12"
+rusqlite = { version = "0.33", features = ["bundled"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Errors / logging
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Crypto / hashing / encoding
+sha1 = "0.10"
+sha2 = "0.10"
+hex = "0.4"
+base64 = "0.22"
+crc32fast = "1"
+
+# Misc
+chrono = { version = "0.4", features = ["serde"] }
+pulldown-cmark = "0.13"
+walkdir = "2"
+bytes = "1"
+
+[dev-dependencies]
+tempfile = "3"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+flate2 = "1"
+proptest = "1"
+tokio-test = "0.4"
+tokio-tungstenite = "0.24"

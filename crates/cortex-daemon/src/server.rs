@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use cortex_context::store::SymbolStore;
 use cortex_core::config::Config;
+use cortex_core::lock_ext::LockExt;
 use cortex_core::protocol::{Method, Request, ResponseChunk};
 use cortex_core::workspace;
 use std::sync::{Arc, Mutex};
@@ -138,7 +139,7 @@ async fn handle_client(
                 let dirs: Vec<std::path::PathBuf> =
                     directories.iter().map(std::path::PathBuf::from).collect();
                 let (stats_msg, _file_count, _sym_count) = {
-                    let store = symbols.lock().unwrap();
+                    let store = symbols.lock_panic_on_poison();
                     match cortex_context::indexer::index_directories(
                         &store,
                         &dirs,
@@ -192,14 +193,14 @@ async fn handle_client(
             Method::Status => {
                 let models = ollama.list_models().await.unwrap_or_default();
                 let (file_count, symbol_count) = {
-                    let store = symbols.lock().unwrap();
+                    let store = symbols.lock_panic_on_poison();
                     (
                         store.file_count().unwrap_or(0),
                         store.symbol_count().unwrap_or(0),
                     )
                 };
                 let kairos_info = {
-                    let st = kairos.lock().unwrap();
+                    let st = kairos.lock_panic_on_poison();
                     let branch = st.git_branch.as_deref().unwrap_or("none");
                     let top_hot: Vec<_> = {
                         let mut files: Vec<_> = st.hot_files.iter().collect();
@@ -240,7 +241,7 @@ async fn handle_client(
             }
             Method::Sessions => {
                 let sessions = {
-                    let store = symbols.lock().unwrap();
+                    let store = symbols.lock_panic_on_poison();
                     store.list_sessions().unwrap_or_default()
                 };
                 if sessions.is_empty() {
@@ -272,7 +273,7 @@ async fn handle_client(
             }
             Method::DeleteSession { name } => {
                 let deleted = {
-                    let store = symbols.lock().unwrap();
+                    let store = symbols.lock_panic_on_poison();
                     store.delete_session(&name).unwrap_or(false)
                 };
                 let chunk = ResponseChunk::Status {

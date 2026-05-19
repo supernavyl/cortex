@@ -111,7 +111,10 @@ pub fn detect_task_type(prompt: &str) -> TaskType {
         (TaskType::CodeWrite, score(&code_hits) * 2),
     ];
 
-    let best = scores.iter().max_by_key(|(_, s)| s).unwrap();
+    // SAFETY: `scores` is a non-empty fixed-size array literal above.
+    let Some(best) = scores.iter().max_by_key(|(_, s)| s) else {
+        return TaskType::CodeWrite;
+    };
     if best.1 == 0 {
         // No keywords matched — decide by prompt length
         if prompt.split_whitespace().count() < 8 {

@@ -1,4 +1,5 @@
 //! cortex-bench — benchmark local and cloud models on coding tasks.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! Usage:
 //!   cortex-bench run [--models <spec>] [--tasks <spec>] [--ollama <url>]

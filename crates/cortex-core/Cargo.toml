@@ -17,3 +17,6 @@ thiserror = "1"
 [dev-dependencies]
 tempfile = "3"
 tokio = { workspace = true, features = ["rt", "time", "macros"] }
+
+[lints]
+workspace = true

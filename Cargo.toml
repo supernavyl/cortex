@@ -8,6 +8,13 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.93"
 
+[workspace.lints.clippy]
+# Production unwraps were swept 2026-05-19 (Phase 5). Mutex locks now use
+# `LockExt::lock_panic_on_poison()`; remaining sites carry SAFETY justifications.
+# Keep this at warn so test code is unaffected; CI enforces -D warnings.
+unwrap_used = "warn"
+expect_used = "warn"
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

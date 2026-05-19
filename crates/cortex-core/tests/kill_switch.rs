@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Kill switch test for the pre-apply SandboxGate.
 //!
 //! Run with:

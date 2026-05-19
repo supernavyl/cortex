@@ -19,3 +19,6 @@ serde_json.workspace = true
 futures.workspace = true
 chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
+
+[lints]
+workspace = true

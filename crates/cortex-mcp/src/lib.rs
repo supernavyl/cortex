@@ -1,4 +1,5 @@
 //! MCP integration for CORTEX — both server and client.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! - **Server**: Exposes CORTEX tools to external MCP clients (Claude Code, Cursor, etc.)
 //! - **Client**: Connects to external MCP servers and bridges their tools into CORTEX.

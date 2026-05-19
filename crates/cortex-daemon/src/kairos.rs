@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 
 use cortex_context::store::SymbolStore;
 use cortex_core::config::Config;
+use cortex_core::lock_ext::LockExt;
 
 /// Debounce window — wait this long after last change before re-indexing.
 const DEBOUNCE_MS: u64 = 800;
@@ -197,7 +198,7 @@ async fn debounce_and_reindex(
 
         // Update hot file tracking
         {
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_panic_on_poison();
             for path in &ready {
                 let key = path.to_string_lossy().to_string();
                 *st.hot_files.entry(key).or_insert(0) += 1;
@@ -205,7 +206,7 @@ async fn debounce_and_reindex(
         }
 
         // Perform incremental re-index
-        let store = symbols.lock().unwrap();
+        let store = symbols.lock_panic_on_poison();
         match cortex_context::indexer::index_files(&store, &ready, max_file_size) {
             Ok(stats) => {
                 if stats.files_indexed > 0 || stats.files_errored > 0 {
@@ -217,7 +218,7 @@ async fn debounce_and_reindex(
                         "kairos: incremental re-index"
                     );
                 }
-                let mut st = state.lock().unwrap();
+                let mut st = state.lock_panic_on_poison();
                 st.reindex_count += 1;
                 st.files_reindexed += stats.files_indexed;
                 st.last_reindex = Some(Instant::now());
@@ -288,7 +289,7 @@ async fn git_status_loop(state: Arc<Mutex<KairosState>>, watch_dirs: &[PathBuf])
             })
             .unwrap_or(0);
 
-        let mut st = state.lock().unwrap();
+        let mut st = state.lock_panic_on_poison();
         let branch_changed = st.git_branch.as_deref() != branch.as_deref();
         st.git_branch = branch;
         st.git_dirty_count = dirty_count;
@@ -305,7 +306,7 @@ async fn stale_cleanup_loop(symbols: Arc<Mutex<SymbolStore>>, state: Arc<Mutex<K
         tokio::time::sleep(Duration::from_secs(STALE_CLEANUP_INTERVAL_SECS)).await;
 
         let indexed_files = {
-            let store = symbols.lock().unwrap();
+            let store = symbols.lock_panic_on_poison();
             store.indexed_files().unwrap_or_default()
         };
 
@@ -313,7 +314,7 @@ async fn stale_cleanup_loop(symbols: Arc<Mutex<SymbolStore>>, state: Arc<Mutex<K
         for file_path in &indexed_files {
             let path = std::path::Path::new(file_path);
             if !path.exists() {
-                let store = symbols.lock().unwrap();
+                let store = symbols.lock_panic_on_poison();
                 if store.remove_file(file_path).is_ok() {
                     removed += 1;
                     tracing::debug!(path = %file_path, "kairos: removed stale file from index");
@@ -323,7 +324,7 @@ async fn stale_cleanup_loop(symbols: Arc<Mutex<SymbolStore>>, state: Arc<Mutex<K
 
         if removed > 0 {
             tracing::info!(count = removed, "kairos: cleaned stale files from index");
-            let mut st = state.lock().unwrap();
+            let mut st = state.lock_panic_on_poison();
             st.files_cleaned += removed;
         }
     }
