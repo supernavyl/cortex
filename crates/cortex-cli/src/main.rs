@@ -10,7 +10,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
 #[derive(Parser)]
-#[command(name = "cortex", about = "CORTEX — coding AI with verification")]
+#[command(
+    name = "cortex",
+    version,
+    about = "CORTEX — Rust pre-apply verification gate for coding AI",
+    long_about = "CORTEX wraps any LLM-driven editor with a sandbox + cargo check gate \
+                  that runs before edits touch your filesystem. Edits that don't \
+                  compile are rejected; only verified diffs reach disk."
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

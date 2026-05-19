@@ -1,0 +1,35 @@
+# Maintainer: supernovyl
+pkgname=cortex-bin
+_pkgname=cortex
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="CORTEX — Rust pre-apply verification gate for coding AI"
+arch=('x86_64' 'aarch64')
+url="https://github.com/supernovyl/cortex"
+license=('MIT')
+depends=('rust' 'glibc')
+optdepends=('ollama: local model backend')
+provides=('cortex')
+conflicts=('cortex')
+options=('!strip')
+
+case "$CARCH" in
+  x86_64)  _triple="x86_64-unknown-linux-musl" ;;
+  aarch64) _triple="aarch64-unknown-linux-musl" ;;
+esac
+
+source=("${_pkgname}-${pkgver}-${_triple}.tar.gz::${url}/releases/download/v${pkgver}/${_pkgname}-${pkgver}-${_triple}.tar.gz")
+# sha256sums are populated by `updpkgsums` after each release.
+sha256sums=('SKIP')
+
+package() {
+  cd "${_pkgname}-${pkgver}-${_triple}"
+
+  install -Dm755 cortex         "${pkgdir}/usr/bin/cortex"
+  install -Dm755 cortex-daemon  "${pkgdir}/usr/bin/cortex-daemon"
+
+  install -Dm644 README.md      "${pkgdir}/usr/share/doc/${_pkgname}/README.md"
+  if [[ -f LICENSE ]]; then
+    install -Dm644 LICENSE      "${pkgdir}/usr/share/licenses/${_pkgname}/LICENSE"
+  fi
+}

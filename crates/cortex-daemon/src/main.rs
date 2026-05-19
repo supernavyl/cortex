@@ -1,11 +1,21 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 use anyhow::Result;
+use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 mod apply;
 mod kairos;
 mod ollama;
 mod server;
+
+/// CORTEX daemon — Unix-socket server that hosts the pre-apply verification gate.
+#[derive(Parser)]
+#[command(
+    name = "cortex-daemon",
+    version,
+    about = "CORTEX daemon — Rust pre-apply verification gate (Unix-socket server)"
+)]
+struct DaemonArgs {}
 
 pub fn maybe_auto_index_dirs(
     watch_dirs: &[std::path::PathBuf],
@@ -22,6 +32,10 @@ pub fn maybe_auto_index_dirs(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse CLI args first so --version / --help short-circuit before any
+    // side effects (config load, socket bind, indexer spin-up).
+    let _args = DaemonArgs::parse();
+
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),

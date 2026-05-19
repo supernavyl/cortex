@@ -1,0 +1,118 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build-${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive_ext: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            archive_ext: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install musl tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          if [[ "${{ matrix.target }}" == aarch64-* ]]; then
+            sudo apt-get install -y gcc-aarch64-linux-gnu
+          fi
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Configure cross-linker for aarch64
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: |
+          mkdir -p .cargo
+          {
+            echo '[target.aarch64-unknown-linux-musl]'
+            echo 'linker = "aarch64-linux-gnu-gcc"'
+          } >> .cargo/config.toml
+
+      - name: Build release binaries
+        run: |
+          cargo build --release --target ${{ matrix.target }} \
+            --bin cortex-cli --bin cortex-daemon
+
+      - name: Package archive
+        id: package
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          # REF_NAME is set by GitHub on tag pushes; for workflow_dispatch we
+          # fall back to the user-supplied INPUT_TAG. Both are quoted via env
+          # to avoid command injection per github.com/security advisories.
+          VERSION="${REF_NAME#v}"
+          if [[ -z "$VERSION" || "$VERSION" == "$REF_NAME" ]]; then
+            VERSION="${INPUT_TAG#v}"
+          fi
+          STAGE="cortex-${VERSION}-${TARGET}"
+          mkdir -p "dist/$STAGE"
+          cp "target/${TARGET}/release/cortex-cli" "dist/$STAGE/cortex"
+          cp "target/${TARGET}/release/cortex-daemon" "dist/$STAGE/cortex-daemon"
+          [[ -f LICENSE ]] && cp LICENSE "dist/$STAGE/"
+          cp README.md "dist/$STAGE/"
+          tar -C dist -czf "dist/${STAGE}.tar.gz" "$STAGE"
+          (cd dist && sha256sum "${STAGE}.tar.gz" > "${STAGE}.tar.gz.sha256")
+          echo "archive=dist/${STAGE}.tar.gz" >> "$GITHUB_OUTPUT"
+          echo "sha256=dist/${STAGE}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cortex-${{ matrix.target }}
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.sha256 }}
+
+  publish:
+    name: publish release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Move artifacts to root
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} release/ \;
+          ls -la release/
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          draft: false
+          generate_release_notes: true

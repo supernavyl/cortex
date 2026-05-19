@@ -1,0 +1,16 @@
+[Unit]
+Description=CORTEX daemon — Rust pre-apply verification gate
+Documentation=https://github.com/supernovyl/cortex
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/cortex-daemon
+Restart=on-failure
+RestartSec=2s
+Environment=RUST_LOG=info
+# Cortex stores its socket and SQLite symbol DB under $XDG_CONFIG_HOME.
+Environment=XDG_CONFIG_HOME=%h/.config
+
+[Install]
+WantedBy=default.target

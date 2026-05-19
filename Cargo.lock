@@ -248,7 +248,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "cortex-bench"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-context"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "rusqlite",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -311,9 +311,10 @@ dependencies = [
 
 [[package]]
 name = "cortex-daemon"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
+ "clap",
  "cortex-context",
  "cortex-core",
  "cortex-tools",
@@ -332,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-mcp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -347,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "cortex-tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cortex-core",
