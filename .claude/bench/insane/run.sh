@@ -19,7 +19,7 @@ case "$BENCH_TIER" in
   project) TASKS_DIR="$REPO_ROOT/.claude/bench/insane/projects" ;;
   *) echo "BENCH_TIER must be 'algo' or 'project'"; exit 2 ;;
 esac
-CORTEX_MODEL="${CORTEX_MODEL:-kimi-k2.6:cloud}"
+CORTEX_MODEL="${CORTEX_MODEL:-qwen3.6:27b}"
 TIMEOUT_SECS="${TIMEOUT_SECS:-900}"   # 15 min per project task
 FAKE_PASS_THRESHOLD="${FAKE_PASS_THRESHOLD:-30}"  # rust_lines below = NOPROD
 

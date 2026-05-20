@@ -3,7 +3,10 @@
 //! Two gate types:
 //! - [`PreApplyGate`]: post-write check on the real workspace.
 //! - [`SandboxGate`]: pre-apply check — copies workspace to a tempdir, applies
-//!   the proposed edit there, runs `cargo check`, returns accept/reject
+//!   the proposed edit there, runs `cargo check --all-targets`, returns accept/reject.
+//!   `--all-targets` compiles test, example, and bench targets without running
+//!   them — so tests that reference the wrong signature (e.g. `Sized` mismatch)
+//!   are caught by the gate, not by a later `cargo test` after the diff lands.
 //!   without ever touching the real filesystem.
 //!
 //! Non-Rust workspaces return [`GateResult::SpawnFailed`] and fail-closed.
@@ -131,7 +134,8 @@ impl Default for PreApplyGate {
 impl PreApplyGate {
     /// Run language-appropriate correctness checks on the workspace.
     ///
-    /// Per ADR-005, cortex is Rust-only. A Rust workspace runs `cargo check`;
+    /// Per ADR-005, cortex is Rust-only. A Rust workspace runs `cargo check
+    /// --all-targets` (lib + tests + examples + benches, no test execution);
     /// any non-Rust workspace returns [`GateResult::SpawnFailed`] and is
     /// rejected by [`SandboxGate::verify`]. The 30s default timeout caps each
     /// invocation to keep the tokio runtime responsive.
@@ -163,6 +167,7 @@ impl PreApplyGate {
         let outcome = run_with_timeout(timeout_secs, move || {
             let mut cmd = std::process::Command::new("cargo");
             cmd.arg("check")
+                .arg("--all-targets")
                 .arg("--message-format=short")
                 .arg("--quiet")
                 .arg("--offline");
