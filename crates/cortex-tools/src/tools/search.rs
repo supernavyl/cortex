@@ -216,7 +216,7 @@ mod tests {
     fn test_glob_current_dir() {
         let input = serde_json::json!({
             "pattern": "*.rs",
-            "path": "/home/supernovyl/projects/cortex/crates/cortex-tools/src"
+            "path": concat!(env!("CARGO_MANIFEST_DIR"), "/src")
         });
         let result = exec_glob(&input).unwrap();
         assert!(result.contains(".rs"));
@@ -226,7 +226,7 @@ mod tests {
     fn test_grep_pattern() {
         let input = serde_json::json!({
             "pattern": "pub fn",
-            "path": "/home/supernovyl/projects/cortex/crates/cortex-tools/src"
+            "path": concat!(env!("CARGO_MANIFEST_DIR"), "/src")
         });
         let result = exec_grep(&input).unwrap();
         // Should find at least the functions we just wrote

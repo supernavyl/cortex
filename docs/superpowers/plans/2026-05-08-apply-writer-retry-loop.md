@@ -53,7 +53,7 @@ mod tests {
 - [ ] **Step 2: Run test to verify it fails**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo test -p cortex-core apply_cwd 2>&1 | tail -20
+cd ~ && cargo test -p cortex-core apply_cwd 2>&1 | tail -20
 ```
 
 Expected: FAIL with `missing field 'cwd'` or similar because `cwd` doesn't exist yet.
@@ -83,7 +83,7 @@ with:
 - [ ] **Step 4: Run test to verify it passes**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo test -p cortex-core apply_cwd 2>&1 | tail -10
+cd ~ && cargo test -p cortex-core apply_cwd 2>&1 | tail -10
 ```
 
 Expected: `test tests::apply_cwd_defaults_to_none_when_missing ... ok`
@@ -116,7 +116,7 @@ Expected: `test tests::apply_cwd_defaults_to_none_when_missing ... ok`
 - [ ] **Step 6: Verify it compiles**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo check -p cortex-daemon 2>&1 | tail -10
+cd ~ && cargo check -p cortex-daemon 2>&1 | tail -10
 ```
 
 Expected: no errors.
@@ -124,7 +124,7 @@ Expected: no errors.
 - [ ] **Step 7: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git add crates/cortex-core/src/protocol.rs crates/cortex-daemon/src/server.rs && git commit -m "feat(protocol): add cwd field to Method::Apply"
+cd ~ && git add crates/cortex-core/src/protocol.rs crates/cortex-daemon/src/server.rs && git commit -m "feat(protocol): add cwd field to Method::Apply"
 ```
 
 ---
@@ -257,7 +257,7 @@ mod server;
 - [ ] **Step 3: Run the path-validation tests to verify they pass**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo test -p cortex-daemon validate_path 2>&1 | tail -10
+cd ~ && cargo test -p cortex-daemon validate_path 2>&1 | tail -10
 ```
 
 Expected:
@@ -458,7 +458,7 @@ fn build_system_prompt(workspace_root: &Path) -> String {
 - [ ] **Step 5: Verify it compiles**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo check -p cortex-daemon 2>&1 | tail -15
+cd ~ && cargo check -p cortex-daemon 2>&1 | tail -15
 ```
 
 Expected: no errors (the todo! is removed so it compiles as real code now).
@@ -466,7 +466,7 @@ Expected: no errors (the todo! is removed so it compiles as real code now).
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git add crates/cortex-daemon/src/apply.rs crates/cortex-daemon/src/main.rs && git commit -m "feat(apply): add WRITER + sandbox retry loop core"
+cd ~ && git add crates/cortex-daemon/src/apply.rs crates/cortex-daemon/src/main.rs && git commit -m "feat(apply): add WRITER + sandbox retry loop core"
 ```
 
 ---
@@ -570,7 +570,7 @@ Then add `apply_mutex` as the last argument to the `server::run(...)` call:
 - [ ] **Step 5: Verify it compiles**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo check -p cortex-daemon 2>&1 | tail -15
+cd ~ && cargo check -p cortex-daemon 2>&1 | tail -15
 ```
 
 Expected: no errors.
@@ -578,7 +578,7 @@ Expected: no errors.
 - [ ] **Step 6: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git add crates/cortex-daemon/src/server.rs crates/cortex-daemon/src/main.rs && git commit -m "feat(apply): add workspace apply_mutex to serialise concurrent Apply requests"
+cd ~ && git add crates/cortex-daemon/src/server.rs crates/cortex-daemon/src/main.rs && git commit -m "feat(apply): add workspace apply_mutex to serialise concurrent Apply requests"
 ```
 
 ---
@@ -679,7 +679,7 @@ In `server.rs`, replace the entire `Method::Apply { ... }` match arm (currently 
 - [ ] **Step 3: Verify it compiles**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo build -p cortex-daemon 2>&1 | tail -20
+cd ~ && cargo build -p cortex-daemon 2>&1 | tail -20
 ```
 
 Expected: no errors. The daemon binary should build successfully.
@@ -687,7 +687,7 @@ Expected: no errors. The daemon binary should build successfully.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git add crates/cortex-daemon/src/server.rs && git commit -m "feat(apply): wire Method::Apply stub to run_apply_loop"
+cd ~ && git add crates/cortex-daemon/src/server.rs && git commit -m "feat(apply): wire Method::Apply stub to run_apply_loop"
 ```
 
 ---
@@ -820,7 +820,7 @@ fn ollama_available() -> bool {
 - [ ] **Step 2: Run the unconditional tests to verify they pass**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo test -p cortex-daemon apply_integration 2>&1 | tail -20
+cd ~ && cargo test -p cortex-daemon apply_integration 2>&1 | tail -20
 ```
 
 Expected:
@@ -832,7 +832,7 @@ test apply_integration::validate_path_rejects_absolute_paths ... ok
 - [ ] **Step 3: Verify full build passes**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo build 2>&1 | tail -10
+cd ~ && cargo build 2>&1 | tail -10
 ```
 
 Expected: clean build.
@@ -840,7 +840,7 @@ Expected: clean build.
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git add crates/cortex-daemon/tests/apply_integration.rs && git commit -m "test(apply): integration tests for apply loop — path guard + mutex serialisation"
+cd ~ && git add crates/cortex-daemon/tests/apply_integration.rs && git commit -m "test(apply): integration tests for apply loop — path guard + mutex serialisation"
 ```
 
 ---
@@ -850,7 +850,7 @@ cd /home/supernovyl/projects/cortex && git add crates/cortex-daemon/tests/apply_
 - [ ] **Step 1: Run all tests in the workspace**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo test 2>&1 | tail -30
+cd ~ && cargo test 2>&1 | tail -30
 ```
 
 Expected: all tests pass. No regressions in cortex-core, cortex-tools, cortex-mcp, or cortex-daemon.
@@ -858,7 +858,7 @@ Expected: all tests pass. No regressions in cortex-core, cortex-tools, cortex-mc
 - [ ] **Step 2: Verify the daemon binary builds and start it**
 
 ```bash
-cd /home/supernovyl/projects/cortex && cargo build --bin cortex-daemon 2>&1 | tail -5
+cd ~ && cargo build --bin cortex-daemon 2>&1 | tail -5
 ```
 
 Expected: `Compiling cortex-daemon ... Finished`.
@@ -878,7 +878,7 @@ Review against ADR-004 done criteria:
 - [ ] **Step 4: Commit**
 
 ```bash
-cd /home/supernovyl/projects/cortex && git commit --allow-empty -m "chore(apply): ADR-004 done-criteria verified"
+cd ~ && git commit --allow-empty -m "chore(apply): ADR-004 done-criteria verified"
 ```
 
 ---

@@ -1,3 +1,14 @@
 /target
+target/
 /.cortex-target-cache
 *.cortex-tmp-*
+
+# secrets
+.env
+*.pem
+
+# build junk
+node_modules/
+dist/
+__pycache__/
+.venv/

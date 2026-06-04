@@ -12,7 +12,7 @@
 
 set -uo pipefail
 
-REPO_ROOT="/home/supernovyl/projects/cortex"
+REPO_ROOT="$HOME/projects/cortex"
 BENCH_TIER="${BENCH_TIER:-project}"   # 'algo' or 'project'
 case "$BENCH_TIER" in
   algo)    TASKS_DIR="$REPO_ROOT/.claude/bench/insane/tasks" ;;

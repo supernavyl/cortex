@@ -314,7 +314,30 @@ impl OllamaClient {
             let mut line_buf: Vec<u8> = Vec::new();
             let mut done = false;
 
-            while let Some(chunk_result) = stream.next().await {
+            // Per-chunk inactivity timeout: if no bytes flow for this long, the
+            // model has hung (observed with GLM-5.1:cloud on multi-file project
+            // prompts). Surface as error so cortex-cli can retry or escalate
+            // instead of consuming the entire 900s bench wall.
+            const STREAM_IDLE_TIMEOUT: std::time::Duration =
+                std::time::Duration::from_secs(60);
+
+            loop {
+                let next_chunk =
+                    tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await;
+                let chunk_result = match next_chunk {
+                    Ok(Some(c)) => c,
+                    Ok(None) => break, // stream ended normally
+                    Err(_) => {
+                        tracing::warn!(
+                            timeout_s = STREAM_IDLE_TIMEOUT.as_secs(),
+                            "ollama stream idle — model hang, aborting"
+                        );
+                        anyhow::bail!(
+                            "ollama chat stream idle for {}s — likely model hang",
+                            STREAM_IDLE_TIMEOUT.as_secs()
+                        );
+                    }
+                };
                 let bytes = chunk_result.context("chat stream read error")?;
                 for &b in bytes.iter() {
                     if b == b'\n' {
