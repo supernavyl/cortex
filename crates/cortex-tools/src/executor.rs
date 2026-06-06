@@ -85,7 +85,7 @@ impl ToolExecutor {
     ///
     /// When enabled, every `write_file` and `edit_file` call is verified in a
     /// sandboxed copy of the workspace before the real filesystem is touched.
-    /// A [`BlastRadius::HardReject`] failure aborts the write entirely.
+    /// A [`cortex_core::gate::BlastRadius::HardReject`] failure aborts the write entirely.
     pub fn enable_sandbox_gate(mut self, gate: SandboxGate) -> Self {
         self.sandbox = Some(gate);
         self

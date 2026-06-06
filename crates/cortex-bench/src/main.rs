@@ -2,7 +2,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //!
 //! Usage:
-//!   cortex-bench run [--models <spec>] [--tasks <spec>] [--ollama <URL>]
+//!   cortex-bench run [--models `<spec>`] [--tasks `<spec>`] [--ollama `<URL>`]
 //!
 //!   --models  "all" | "local" | "cloud" | "quick" | comma-separated model names
 //!             default: "quick"  (qwen3.6:27b, glm-5.1:cloud, deepseek-v4-flash:cloud)
