@@ -318,12 +318,10 @@ impl OllamaClient {
             // model has hung (observed with GLM-5.1:cloud on multi-file project
             // prompts). Surface as error so cortex-cli can retry or escalate
             // instead of consuming the entire 900s bench wall.
-            const STREAM_IDLE_TIMEOUT: std::time::Duration =
-                std::time::Duration::from_secs(60);
+            const STREAM_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
             loop {
-                let next_chunk =
-                    tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await;
+                let next_chunk = tokio::time::timeout(STREAM_IDLE_TIMEOUT, stream.next()).await;
                 let chunk_result = match next_chunk {
                     Ok(Some(c)) => c,
                     Ok(None) => break, // stream ended normally
