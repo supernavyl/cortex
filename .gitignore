@@ -12,3 +12,7 @@ node_modules/
 dist/
 __pycache__/
 .venv/
+
+# internal AI-process artifacts
+.claude/
+CLAUDE-*.md
