@@ -644,7 +644,14 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    // Ignored in CI: this checks the *entire* cortex workspace via the gate's
+    // `cargo check --all-targets --offline`, which cold-compiles every crate and
+    // dependency into the gate's separate target dir. That exceeds the gate's 30s
+    // timeout on an ephemeral runner (the gate is designed around a warm
+    // incremental cache — see `shared_cargo_target_dir`). Run locally with
+    // `cargo test -- --ignored` on a warm build tree.
     #[tokio::test]
+    #[ignore = "requires a warm cargo build cache; cold full-workspace check exceeds the gate's 30s timeout on CI runners"]
     async fn gate_passes_valid_rust_workspace() {
         // Use CORTEX's own workspace as the test subject — it compiles.
         let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
