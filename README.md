@@ -1,5 +1,7 @@
 # cortex — the Rust pre-apply gate
 
+[![CI](https://github.com/supernavyl/cortex/actions/workflows/ci.yml/badge.svg)](https://github.com/supernavyl/cortex/actions/workflows/ci.yml)
+
 A verification-first coding-AI daemon for Rust workspaces.
 
 Cortex wraps any LLM-driven editor (Claude Code, Cursor, raw API) with a **sandbox + `cargo check` gate** that runs *before* edits touch your filesystem. Edits that don't compile are rejected; only verified diffs reach disk.
